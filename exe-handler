@@ -11,6 +11,7 @@ It reads the file header instead of guessing from the name:
 Console programs open in a terminal window. Everything is logged to ~/.cache/exe-handler.log.
 
 Usage: exe-handler [--dos|--wine] FILE [args...]
+       exe-handler --check FILE     show what exe-handler would do with FILE, without starting it
 
 Per program (optional, put next to the .exe):
   exe-handler.start   lines "A.exe = B.exe": start B.exe when A.exe is opened (e.g. a mod loader)
@@ -244,7 +245,6 @@ def virtual_desktop(path):
 
 
 VB_RUNTIMES = (b"vbrun100", b"vbrun200", b"vbrun300", b"vb40016", b"vb40032", b"msvbvm50", b"msvbvm60")
-VB_LIMIT = 32767 // 15          # Visual Basic stores screen sizes in twips (15 per pixel) in 16-bit integers
 
 
 def is_visual_basic(path):
@@ -300,20 +300,18 @@ def screen_size():
 
 
 def auto_desktop(path):
-    """Old Visual Basic programs crash with 'Run-time error 6: Overflow' on screens (or multi-monitor desktops)
-    wider or taller than 2184 pixels. Give them a virtual desktop window of 1920x1080 (or smaller) instead."""
+    """Old Visual Basic programs (VB3-VB6) store screen sizes in twips (15 per pixel) in 16-bit integers and crash
+    with 'Run-time error 6: Overflow' on wide screens or multi-monitor desktops. Measuring the screen is not reliable
+    everywhere (Wayland, several monitors, a primary monitor that is not the widest), so they always run inside a
+    Wine virtual desktop window of 1600x900, or smaller when the screen is smaller."""
     if not is_visual_basic(path):
         return None
     size = screen_size()
-    if size and size[0] <= VB_LIMIT and size[1] <= VB_LIMIT:
-        log(f"Visual Basic program on a {size[0]}x{size[1]} desktop: fits, no virtual desktop")
-        return None
-    if not size:   # unknown screen: a window that fits almost any screen is safer than the overflow
-        w, h = 1280, 720
-    else:
-        w, h = min(1920, size[0], VB_LIMIT), min(1080, size[1], VB_LIMIT)
-    log(f"Visual Basic program on a {size[0]}x{size[1] if size else ''} desktop -> virtual desktop {w}x{h}"
-        if size else f"Visual Basic program, screen size unknown -> virtual desktop {w}x{h}")
+    w, h = 1600, 900
+    if size:
+        w, h = min(w, size[0] - 40), min(h, size[1] - 80)
+    log(f"Visual Basic program (desktop {size[0]}x{size[1]}) -> virtual desktop {w}x{h}" if size
+        else f"Visual Basic program (screen size unknown) -> virtual desktop {w}x{h}")
     return f"{w}x{h}"
 
 
@@ -410,8 +408,36 @@ def run_dos(path, args):
         return subprocess.run(cmd, cwd=d, stdout=lf, stderr=lf).returncode
 
 
+def check(path):
+    """exe-handler --check FILE: what would happen, for troubleshooting."""
+    path = os.path.abspath(path)
+    if not os.path.isfile(path):
+        print(T(f"File not found: {path}", f"Bestand niet gevonden: {path}"))
+        return 1
+    k, console = kind(path)
+    target = alias(path)
+    print(f"file          {path}")
+    print(f"type          {k}{' (console)' if console else ''}")
+    print(f"start         {target}" + ("" if target == path else "  (exe-handler.start)"))
+    print(f"Visual Basic  {'yes' if is_visual_basic(target) else 'no'}")
+    size = screen_size()
+    print(f"screen        {size[0]}x{size[1] if size else ''}" if size else "screen        unknown")
+    vd = virtual_desktop(target) or (auto_desktop(target) if k not in ("dos", "bat", "msi") else None)
+    print(f"virtual desk  {vd or 'no'}")
+    print(f"wine          {shlex.join(WINE)}  ({'found' if shutil.which(WINE[0]) else 'NOT FOUND'})")
+    print(f"settings      {CONF}  ({'found' if os.path.exists(CONF) else 'not found'})")
+    if shutil.which("xdg-mime"):
+        mt = subprocess.run(["xdg-mime", "query", "filetype", path], capture_output=True, text=True).stdout.strip()
+        app = subprocess.run(["xdg-mime", "query", "default", mt], capture_output=True, text=True).stdout.strip() if mt else ""
+        print(f"double click  {mt} -> {app or '(no default)'}" + ("" if app == "exe-handler.desktop" else
+              T("   <- not exe-handler: run install.sh again", "   <- niet exe-handler: draai install.sh opnieuw")))
+    return 0
+
+
 def main():
     a = sys.argv[1:]
+    if a and a[0] == "--check":
+        return check(a[1] if len(a) > 1 else "")
     force = a.pop(0)[2:] if a and a[0] in ("--dos", "--wine") else None
     if not a or a[0] in ("-h", "--help"):
         print(__doc__)

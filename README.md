@@ -56,8 +56,8 @@ Pi-Apps-Coders; op andere distributies wordt Box64 uit de broncode gebouwd.
 - **Windows-programma's** krijgen de normale titelbalk van je bureaublad, dus minimaliseren, maximaliseren,
   verslepen en sluiten werken. In volledig scherm wordt de muis niet vastgehouden, dus **Alt+Tab** werkt.
 - **Oude Visual Basic-programma's** (VB3 t/m VB6) crashen met *"Run-time error 6: Overflow"* op schermen breder
-  of hoger dan 2184 pixels (ook twee monitoren naast elkaar). exe-handler herkent dat en start ze in een eigen
-  venster van 1920x1080.
+  of hoger dan 2184 pixels (ook twee monitoren naast elkaar). exe-handler herkent ze en start ze altijd in een
+  eigen venster van 1600x900 (kleiner als je scherm kleiner is).
 - **DOS-programma's**: venster dat je kunt vergroten/maximaliseren (het beeld schaalt mee), **Alt+Enter** = volledig
   scherm aan/uit, de muis wordt niet gevangen. Het DOSBox-X-menu is verborgen; instellingen staan in
   `~/.config/exe-handler/dos.conf`.
@@ -72,7 +72,9 @@ Pi-Apps-Coders; op andere distributies wordt Box64 uit de broncode gebouwd.
 | `virtual-desktop.conf` | `~/.config/exe-handler/` | `spel.exe 1024x768`: in een eigen venster van die grootte (voor spellen die de resolutie wisselen) |
 | `dos.conf` | `~/.config/exe-handler/` | DOSBox-X-instellingen |
 
-Logboek: `~/.cache/exe-handler.log`. Handmatig: `exe-handler [--dos|--wine] bestand.exe [argumenten]`.
+Logboek: `~/.cache/exe-handler.log`. Werkt iets niet zoals verwacht, dan laat `exe-handler --check bestand.exe`
+zien wat exe-handler ermee zou doen (type, Visual Basic, schermgrootte, eigen venster, en of dubbelklikken echt
+via exe-handler gaat). Handmatig: `exe-handler [--dos|--wine] bestand.exe [argumenten]`.
 
 ### Bijwerken
 
@@ -88,7 +90,6 @@ plek. Wine, DOSBox-X en de instellingen blijven zoals ze zijn.
 
 - Raspberry Pi 5 (Raspberry Pi OS / Debian 13, arm64): schone installatie in een container; Wine 11.4 via Box64,
   32- en 64-bit, opdrachtregel en vensterprogramma's, DOSBox-X.
-- Zorin OS 18 (x86-64) met Wine 10 en drie monitoren: Visual Basic 4-spel (Poker Broker) in eigen venster.
 
 ## English summary
 

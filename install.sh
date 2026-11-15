@@ -290,7 +290,9 @@ fi
 # directly and fails. With this rule the kernel hands every DOS/Windows program (starts with "MZ") to exe-handler.
 if [ $BINFMT = 1 ] && [ -d /etc/binfmt.d ]; then
   say "Kernel rule: executable .exe files start via exe-handler (binfmt_misc)"
-  run bash -c "echo ':exe-handler:M::MZ::$BIN:' | $SUDO tee /etc/binfmt.d/exe-handler.conf >/dev/null"
+  # zz-: loaded after Wine's own rule (wine.conf) at boot, so exe-handler's rule is the one that counts
+  [ -e /etc/binfmt.d/exe-handler.conf ] && sudo_run rm -f /etc/binfmt.d/exe-handler.conf
+  run bash -c "echo ':exe-handler:M::MZ::$BIN:' | $SUDO tee /etc/binfmt.d/zz-exe-handler.conf >/dev/null"
   if [ -e /proc/sys/fs/binfmt_misc/register ] && [ ! -e /proc/sys/fs/binfmt_misc/exe-handler ]; then
     # Wine's own rule would catch the same files first; turn it off if present
     for w in wine windows windowsPE DOSWin; do
