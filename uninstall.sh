@@ -4,7 +4,7 @@
 set -u
 SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo
 $SUDO rm -f /usr/local/bin/exe-handler /etc/exe-handler.conf /usr/local/share/applications/exe-handler.desktop \
-            /usr/local/share/mime/packages/exe-handler.xml /etc/binfmt.d/exe-handler.conf /etc/binfmt.d/zz-exe-handler.conf
+            /usr/local/share/mime/packages/exe-handler.xml /etc/binfmt.d/exe-handler.conf /etc/binfmt.d/zz-exe-handler.conf /etc/xdg/autostart/exe-handler-warmup.desktop
 [ -e /proc/sys/fs/binfmt_misc/exe-handler ] && echo -1 | $SUDO tee /proc/sys/fs/binfmt_misc/exe-handler >/dev/null
 command -v update-mime-database >/dev/null && $SUDO update-mime-database /usr/local/share/mime
 command -v update-desktop-database >/dev/null && $SUDO update-desktop-database /usr/local/share/applications

@@ -12,6 +12,7 @@ Console programs open in a terminal window. Everything is logged to ~/.cache/exe
 
 Usage: exe-handler [--dos|--wine] FILE [args...]
        exe-handler --check FILE     show what exe-handler would do with FILE, without starting it
+       exe-handler --warmup         get Wine ready in the background (run at login, so programs start smoothly)
 
 Per program (optional, put next to the .exe):
   exe-handler.start   lines "A.exe = B.exe": start B.exe when A.exe is opened (e.g. a mod loader)
@@ -134,6 +135,30 @@ def env_wine():
 def wine(*args, e=None, timeout=300):
     return subprocess.run(WINE + list(args), env=e or env_wine(), stdout=subprocess.DEVNULL,
                           stderr=subprocess.DEVNULL, timeout=timeout)
+
+
+def wineserver_cmd():
+    """The wineserver that belongs to WINE: next to a wine given by path (ARM: via box64), else from PATH."""
+    if "/" in WINE[-1]:
+        return WINE[:-1] + [os.path.join(os.path.dirname(WINE[-1]), "wineserver")]
+    return ["wineserver"] if shutil.which("wineserver") else None
+
+
+def keep_wine_ready(e, warm=False):
+    """Start a wineserver that stays (-p). When Wine starts from nothing it reads all monitors again a dozen
+    times; on a multi-monitor desktop every read freezes the screen for a moment (2 seconds of stutter in total
+    on a three-monitor laptop). With a wineserver that stays this happens once, not at every program start.
+    warm=True (exe-handler --warmup, run at login) also does that first read right away."""
+    ws = wineserver_cmd()
+    if not ws or not os.path.exists(os.path.join(e["WINEPREFIX"], "system.reg")):
+        return
+    try:
+        subprocess.run(ws + ["-p"], env=e, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+        if warm:
+            wine("cmd", "/c", "exit", e=e, timeout=120)
+            log("warmup: wineserver stays ready")
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def page_size_ok():
@@ -605,6 +630,7 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
         tell(T("Could not prepare Wine. See ~/.cache/exe-handler.log",
                "Wine kon niet worden klaargezet. Zie ~/.cache/exe-handler.log"), error=True)
         return 1
+    keep_wine_ready(e)
     path = alias(path)
     auto_settings(path, e)
     reg = next_to(path, "exe-handler.reg", "run-exe.reg")
@@ -816,6 +842,10 @@ def check(path):
 
 def main():
     a = sys.argv[1:]
+    if a and a[0] == "--warmup":
+        if shutil.which(WINE[0]) and page_size_ok():
+            keep_wine_ready(env_wine(), warm=True)
+        return 0
     if a and a[0] == "--check":
         return check(a[1] if len(a) > 1 else "")
     force = a.pop(0)[2:] if a and a[0] in ("--dos", "--wine") else None

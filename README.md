@@ -67,6 +67,10 @@ Pi-Apps-Coders; op andere distributies wordt Box64 uit de broncode gebouwd.
   wissel na (`EmulateModeset`), je echte monitor en de indeling van meerdere schermen blijven zoals ze zijn. Als
   vangnet zet exe-handler na afloop de monitoren terug als een programma ze toch heeft veranderd (bijvoorbeeld na
   een crash).
+- **Geen haperen bij het starten van een Windows-programma**: start Wine vanaf nul, dan leest het een tiental keer
+  alle monitoren opnieuw uit en bij meerdere schermen staat het bureaublad daarbij telkens even stil (gemeten:
+  12 keer, samen 2 seconden). exe-handler laat de Wine-server daarom aanstaan en zet Wine 20 seconden na het
+  inloggen alvast klaar (`exe-handler --warmup`, via `/etc/xdg/autostart`).
 - **Oude DirectDraw-spellen** (Windows 95-XP, bijvoorbeeld Jazz Jackrabbit 2) vragen het scherm om 320x200 of
   640x480 in 256 kleuren; moderne schermen weigeren dat ("Could not set video mode"). Op x86 zet exe-handler
   eenmalig [cnc-ddraw](https://github.com/FunkyFr3sh/cnc-ddraw) (`ddraw.dll` + `ddraw.ini`) naast het spel: het

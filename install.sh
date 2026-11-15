@@ -41,6 +41,30 @@ say()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mXX\033[0m %s\n' "$*" >&2; exit 1; }
 run()  { if [ $DRY = 1 ]; then echo "   [dry-run] $*"; else "$@"; fi; }
+
+# ---------- telling what is going on ----------
+T0=$(date +%s); STEP=0; TOTAL=8
+ILOG=$(mktemp /tmp/exe-handler-install.XXXXXX.log)     # full output of everything that runs quietly
+elapsed() { local t=$(( $(date +%s) - ${1:-$T0} )); printf '%d:%02d' $((t / 60)) $((t % 60)); }
+step() { STEP=$((STEP + 1)); printf '\n\033[1;34m[%d/%d]\033[0m \033[1m%s\033[0m  \033[2m(%s)\033[0m\n' "$STEP" "$TOTAL" "$*" "$(elapsed)"; }
+doing() { printf '   \033[36m->\033[0m %s\n' "$*"; }
+ok()    { printf '   \033[32mok\033[0m %s\n' "$*"; }
+# busy "what" command...: run a quiet command and show that it is still working, with a running clock
+busy() {
+  local what=$1 t rc; shift; t=$(date +%s)
+  if [ $DRY = 1 ]; then echo "   [dry-run] $*"; return 0; fi
+  echo "### $what: $*" >>"$ILOG"
+  "$@" >>"$ILOG" 2>&1 &
+  local pid=$!
+  while kill -0 $pid 2>/dev/null; do
+    if [ -t 1 ]; then printf '\r   \033[36m..\033[0m %s  %s ' "$what" "$(elapsed "$t")"; fi
+    sleep 1
+  done
+  wait $pid; rc=$?
+  [ -t 1 ] && printf '\r\033[K'
+  if [ $rc = 0 ]; then ok "$what ($(elapsed "$t"))"; else warn "$what failed after $(elapsed "$t") (details: $ILOG)"; fi
+  return $rc
+}
 SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo
 sudo_run() { if [ -n "$SUDO" ]; then run sudo "$@"; else run "$@"; fi; }
 ask() { [ $YES = 1 ] && return 0; read -r -p "$1 [Y/n] " r; [[ ! "$r" =~ ^[nN] ]]; }
@@ -88,12 +112,32 @@ pkg_install() {  # install packages, ignore the ones that do not exist on this d
     zypper)  sudo_run zypper --non-interactive install "$@" ;;
   esac
 }
-pkg_try() { for p in "$@"; do pkg_install "$p" >/dev/null 2>&1 && echo "   + $p" || warn "package $p not available, skipped"; done; }
+pkg_have() { case $PM in apt-get) dpkg -s "$1" 2>/dev/null | grep -q '^Status: install ok installed' ;; pacman) pacman -Qi "$1" >/dev/null 2>&1 ;; *) rpm -q "$1" >/dev/null 2>&1 ;; esac; }
+pkg_try() {
+  local p
+  for p in "$@"; do
+    if pkg_have "$p"; then echo "   =  $p (already installed)"
+    elif [ $DRY = 1 ]; then echo "   [dry-run] install package $p"
+    else busy "installing package $p" pkg_install "$p" || true
+    fi
+  done
+}
 
-[ $PM = apt-get ] && sudo_run apt-get update -qq
+[ "$ARCH" = aarch64 ] && TOTAL=7
+[ $BINFMT = 1 ] || TOTAL=$((TOTAL - 1))
+echo "   Everything that runs quietly is written to $ILOG"
+if [ -n "$SUDO" ] && [ $DRY = 0 ]; then
+  doing "asking for your password once (sudo); it is remembered until the script is done"
+  sudo -v || die "sudo is needed to install programs"
+  ( while sleep 50; do sudo -n true 2>/dev/null || exit; done ) &     # keep sudo alive during long steps
+  KEEP=$!; trap 'kill $KEEP 2>/dev/null' EXIT
+fi
+if [ $PM = apt-get ]; then
+  busy "refreshing the package list (apt update)" $SUDO apt-get update -qq || true
+fi
 
 # ---------- basic tools ----------
-say "Basic tools (dialogs, download, unpack)"
+step "Basic tools: dialogs, download, unpack, window tools, sound font"
 case $PM in
   apt-get) pkg_try zenity curl ca-certificates xz-utils unzip python3 desktop-file-utils xdg-utils gpg x11-xserver-utils x11-utils wmctrl xdotool imagemagick timgm6mb-soundfont ;;
   *)       pkg_try zenity curl xz unzip python3 desktop-file-utils xdg-utils xrandr xorg-xrandr wmctrl xdotool xorg-xwininfo imagemagick ImageMagick soundfont-fluid fluid-soundfont-gm ;;
@@ -101,11 +145,11 @@ esac
 
 # ---------- DOSBox-X for DOS programs ----------
 DOSBOX_CMD=""
-say "DOSBox-X (DOS programs and games)"
+step "DOSBox-X for DOS programs and games"
 if command -v dosbox-x >/dev/null; then
   DOSBOX_CMD=dosbox-x
 else
-  pkg_install dosbox-x >/dev/null 2>&1 && DOSBOX_CMD=dosbox-x || true
+  busy "installing package dosbox-x" pkg_install dosbox-x && DOSBOX_CMD=dosbox-x || true
   if [ -z "$DOSBOX_CMD" ] && [ $DRY = 1 ]; then DOSBOX_CMD=dosbox-x; fi
   if [ -z "$DOSBOX_CMD" ]; then
     warn "dosbox-x is not in the package sources, trying Flatpak"
@@ -120,23 +164,27 @@ else
   fi
   if [ -z "$DOSBOX_CMD" ]; then
     warn "DOSBox-X not available, using plain DOSBox"
-    pkg_install dosbox >/dev/null 2>&1 && DOSBOX_CMD=dosbox || warn "no DOSBox at all: DOS programs will not run"
+    busy "installing package dosbox" pkg_install dosbox && DOSBOX_CMD=dosbox || warn "no DOSBox at all: DOS programs will not run"
   fi
 fi
-echo "   DOS: ${DOSBOX_CMD:-none}"
+[ -n "$DOSBOX_CMD" ] && ok "DOS programs will use: $DOSBOX_CMD" || warn "no DOSBox available"
 
 # ---------- Wine for Windows programs ----------
 WINE_CMD=""; OTVDM_DIR=""
 install_wine_x86() {
-  say "Wine (Windows programs, 64- and 32-bit)"
+  step "Wine for Windows programs (64- and 32-bit)"
   case $PM in
     apt-get)
-      if command -v wine >/dev/null && dpkg -s wine32:i386 >/dev/null 2>&1; then WINE_CMD=wine; return; fi
+      if command -v wine >/dev/null && dpkg -s wine32:i386 >/dev/null 2>&1; then
+        echo "   =  wine with 32-bit support (already installed: $(wine --version 2>/dev/null))"; WINE_CMD=wine; return
+      fi
+      doing "switching on 32-bit packages (i386), needed for 32-bit Windows programs"
       # 32-bit Windows programs need the i386 part of Wine
       if [ "$(dpkg --print-foreign-architectures | grep -c i386)" = 0 ]; then
         sudo_run dpkg --add-architecture i386; sudo_run apt-get update -qq
       fi
-      pkg_install wine wine64 wine32:i386 || pkg_install wine ;;
+      if command -v wine >/dev/null && dpkg -s wine32:i386 >/dev/null 2>&1; then echo "   =  wine with 32-bit support (already installed)"
+      else busy "installing Wine with 32-bit support (the biggest download, several minutes)" pkg_install wine wine64 wine32:i386 || busy "installing Wine" pkg_install wine; fi ;;
     pacman)
       command -v wine >/dev/null && { WINE_CMD=wine; return; }
       grep -q '^\[multilib\]' /etc/pacman.conf || warn "enable [multilib] in /etc/pacman.conf for 32-bit programs"
@@ -152,13 +200,13 @@ install_box64() {
   if [ $PM = apt-get ]; then
     local p=box64-generic-arm
     case "$MODEL" in *"Raspberry Pi 4"*) p=box64-rpi4arm64 ;; *"Raspberry Pi 3"*) p=box64-rpi3arm64 ;; esac
-    say "Box64 ($p) from $BOX64_REPO"
+    doing "adding the Box64 package source $BOX64_REPO and installing $p"
     run bash -c "curl -fsSL $BOX64_REPO/KEY.gpg | $SUDO gpg --dearmor --yes -o /usr/share/keyrings/box64-archive-keyring.gpg"
     run bash -c "printf 'Types: deb\nURIs: $BOX64_REPO/debian\nSuites: ./\nSigned-By: /usr/share/keyrings/box64-archive-keyring.gpg\n' | $SUDO tee /etc/apt/sources.list.d/box64.sources >/dev/null"
     sudo_run apt-get update -qq
-    pkg_install "$p"
+    busy "installing package $p" pkg_install "$p"
   else
-    say "Box64: building from source (takes 5-15 minutes)"
+    doing "building Box64 from source: this takes 5-15 minutes"
     pkg_try git cmake gcc gcc-c++ make python3
     local b; b=$(mktemp -d)
     run git clone --depth 1 https://github.com/ptitSeb/box64 "$b/box64"
@@ -170,9 +218,9 @@ install_box64() {
 }
 
 install_wine_arm64() {
-  say "Wine for ARM64 = x86-64 Wine running in Box64"
+  step "Wine for ARM64: x86-64 Wine running in Box64, and otvdm for 16-bit programs"
   install_box64
-  # native ARM libraries that Box64 hands to Wine (graphics, sound, fonts, encryption)
+  doing "native ARM libraries that Box64 hands to Wine (graphics, sound, fonts, encryption)"
   case $PM in
     apt-get) pkg_try libx11-6 libxext6 libxrender1 libxrandr2 libxi6 libxcursor1 libxcomposite1 libxinerama1 \
                      libxfixes3 libxxf86vm1 libfreetype6 libfontconfig1 libgl1 libegl1 libvulkan1 libasound2t64 libasound2 \
@@ -183,17 +231,17 @@ install_wine_arm64() {
     echo "   Wine already in $OPT/wine"
   else
     local url="https://github.com/Kron4ek/Wine-Builds/releases/download/$WINE_ARM_VERSION/wine-$WINE_ARM_VERSION-amd64-wow64.tar.xz"
-    say "Downloading Wine $WINE_ARM_VERSION: $url"
+    doing "downloading Wine $WINE_ARM_VERSION (about 190 MB): $url"
     local t; t=$(mktemp -d)
     run curl -fL --progress-bar -o "$t/wine.tar.xz" "$url"
     if [ $DRY = 0 ]; then
       echo "$WINE_ARM_SHA256  $t/wine.tar.xz" | sha256sum -c --quiet - || die "Wine download does not match the expected sha256"
     fi
     sudo_run mkdir -p "$OPT/wine"
-    sudo_run tar -xJf "$t/wine.tar.xz" -C "$OPT/wine" --strip-components=1
+    busy "unpacking Wine to $OPT/wine" $SUDO tar -xJf "$t/wine.tar.xz" -C "$OPT/wine" --strip-components=1
     rm -rf "$t"
   fi
-  # 'wine', 'winecfg' etc. as normal commands
+  doing "making wine, winecfg, regedit ... available as normal commands in /usr/local/bin"
   for c in wine wineserver winecfg wineboot regedit msiexec winepath; do
     command -v $c >/dev/null && [ "$(readlink -f "$(command -v $c)")" != "/usr/local/bin/$c" ] && continue
     run bash -c "printf '#!/bin/sh\nexport BOX64_LOG=\${BOX64_LOG:-0} BOX64_NOBANNER=1\nexec box64 $OPT/wine/bin/$c \"\$@\"\n' | $SUDO tee /usr/local/bin/$c >/dev/null"
@@ -202,7 +250,7 @@ install_wine_arm64() {
   WINE_CMD="box64 $OPT/wine/bin/wine"
   # 16-bit Windows programs: Box64 cannot run 16-bit code, otvdm emulates it
   if [ ! -f "$OPT/otvdm/otvdmw.exe" ]; then
-    say "otvdm (16-bit Windows programs) from $OTVDM_URL"
+    doing "downloading otvdm for 16-bit Windows programs: $OTVDM_URL"
     local t; t=$(mktemp -d)
     run curl -fsSL -o "$t/otvdm.zip" "$OTVDM_URL"
     if [ $DRY = 0 ]; then
@@ -218,8 +266,9 @@ install_wine_arm64() {
 
 install_cnc_ddraw() {
   # old DirectDraw games: scaled window instead of a 320x200/640x480 mode switch (see cnc_ddraw in exe-handler)
-  [ -f "$OPT/cnc-ddraw/ddraw.dll" ] && { echo "   cnc-ddraw already in $OPT/cnc-ddraw"; return; }
-  say "cnc-ddraw $CNC_VERSION (old DirectDraw games) from $CNC_URL"
+  [ -f "$OPT/cnc-ddraw/ddraw.dll" ] && { step "cnc-ddraw for old DirectDraw games"; echo "   =  already in $OPT/cnc-ddraw"; return; }
+  step "cnc-ddraw $CNC_VERSION for old DirectDraw games"
+  doing "downloading $CNC_URL and checking its sha256"
   local t; t=$(mktemp -d)
   run curl -fsSL -o "$t/cnc.zip" "$CNC_URL" || { warn "cnc-ddraw download failed, skipped"; return; }
   if [ $DRY = 0 ]; then
@@ -248,15 +297,17 @@ case $ARCH in
     fi ;;
   *) warn "Windows programs are not supported on $ARCH (only x86 and ARM64). DOS programs will work." ;;
 esac
-echo "   Windows: ${WINE_CMD:-none}"
+[ -n "$WINE_CMD" ] && ok "Windows programs will use: $WINE_CMD" || warn "no Wine available"
 
 # ---------- the handler itself ----------
-say "Installing $BIN and settings $CONF"
+step "The exe-handler program itself"
+doing "copying exe-handler to $BIN and writing $CONF"
 sudo_run install -m 755 "$SRC/exe-handler" "$BIN"
 run bash -c "printf '# written by exe-handler install.sh\nARCH=%s\nWINE=%s\nDOSBOX=%s\nOTVDM=%s\n' '$ARCH' '$WINE_CMD' '$DOSBOX_CMD' '$OTVDM_DIR' | $SUDO tee $CONF >/dev/null"
 
 # ---------- double click: desktop file + file types ----------
-say "Registering .exe/.com/.bat/.msi for double click"
+step "Double click: file types .exe .com .bat .msi open with exe-handler"
+doing "desktop entry $DESKTOP (with right-click 'Open in DOSBox' / 'Open in Wine')"
 sudo_run mkdir -p "$(dirname "$DESKTOP")"
 run bash -c "cat > /tmp/exe-handler.desktop.$$ <<EOF
 [Desktop Entry]
@@ -283,7 +334,7 @@ Name[nl]=Openen in Wine
 Exec=$BIN --wine %f
 EOF
 $SUDO install -m 644 /tmp/exe-handler.desktop.$$ $DESKTOP; rm -f /tmp/exe-handler.desktop.$$"
-# .com and .bat are not known to every desktop: add the file types
+doing "adding the file types .com and .bat, refreshing the file type databases"
 run bash -c "cat > /tmp/exe-handler-mime.$$ <<'EOF'
 <?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <mime-info xmlns=\"http://www.freedesktop.org/standards/shared-mime-info\">
@@ -299,17 +350,25 @@ TARGET_USER=${SUDO_USER:-$(id -un)}
 TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
 as_user() { if [ "$(id -un)" = "$TARGET_USER" ]; then run "$@"; else run sudo -u "$TARGET_USER" HOME="$TARGET_HOME" "$@"; fi; }
 if command -v xdg-mime >/dev/null && [ "$TARGET_USER" != root ]; then
+  doing "making exe-handler the default program for these file types for user $TARGET_USER"
   as_user mkdir -p "$TARGET_HOME/.config"
   for m in ${MIMES//;/ }; do as_user xdg-mime default exe-handler.desktop "$m"; done
+fi
+
+# ---------- Wine ready at login: no stutter when a Windows program starts ----------
+if [ -n "$WINE_CMD" ]; then
+  doing "autostart entry: Wine gets ready in the background 20 seconds after login (exe-handler --warmup)"
+  run bash -c "printf '[Desktop Entry]\nType=Application\nName=exe-handler warmup\nComment=Get Wine ready so Windows programs start without stutter\nExec=$BIN --warmup\nNoDisplay=true\nX-GNOME-Autostart-Delay=20\n' | $SUDO tee /etc/xdg/autostart/exe-handler-warmup.desktop >/dev/null"
 fi
 
 # ---------- kernel: let .exe files run like normal programs ----------
 # File managers and exFAT/NTFS disks often mark .exe files as executable; the system then tries to run them
 # directly and fails. With this rule the kernel hands every DOS/Windows program (starts with "MZ") to exe-handler.
 if [ $BINFMT = 1 ] && [ -d /etc/binfmt.d ]; then
-  say "Kernel rule: executable .exe files start via exe-handler (binfmt_misc)"
+  step "Kernel rule: executable .exe files start via exe-handler (binfmt_misc)"
   # zz-: loaded after Wine's own rule (wine.conf) at boot, so exe-handler's rule is the one that counts
   [ -e /etc/binfmt.d/exe-handler.conf ] && sudo_run rm -f /etc/binfmt.d/exe-handler.conf
+  doing "writing the rule (kept after a reboot) and switching it on now"
   run bash -c "echo ':exe-handler:M::MZ::$BIN:' | $SUDO tee /etc/binfmt.d/zz-exe-handler.conf >/dev/null"
   if [ -e /proc/sys/fs/binfmt_misc/register ] && [ ! -e /proc/sys/fs/binfmt_misc/exe-handler ]; then
     # Wine's own rule would catch the same files first; turn it off if present
@@ -323,12 +382,18 @@ fi
 # ---------- prepare Wine for the user now, so the first double click is fast ----------
 if [ -n "$WINE_CMD" ] && [ "$TARGET_USER" != root ] && { [ "$PAGESIZE" = 4096 ] || [ "$ARCH" != aarch64 ]; }; then
   if [ ! -e "$TARGET_HOME/.wine/drive_c/windows/system32/kernel32.dll" ]; then
-    say "Preparing the Wine folder ~/.wine for $TARGET_USER (one time, 1-3 minutes)"
-    as_user env WINEDEBUG=-all BOX64_LOG=0 BOX64_NOBANNER=1 $WINE_CMD wineboot -u >/dev/null 2>&1 || warn "wineboot failed; it will be retried on the first start"
+    step "Wine folder ~/.wine for $TARGET_USER (one time)"
+    busy "Wine is creating its Windows folder (1-3 minutes)" as_user env WINEDEBUG=-all BOX64_LOG=0 BOX64_NOBANNER=1 $WINE_CMD wineboot -u || warn "it will be tried again on the first start of a Windows program"
+  else
+    step "Wine folder ~/.wine for $TARGET_USER"; echo "   =  already there"
   fi
 fi
 
-say "Done."
+printf '\n\033[1;32mDone in %s.\033[0m\n' "$(elapsed)"
+echo "   DOS programs:      ${DOSBOX_CMD:-not available}"
+echo "   Windows programs:  ${WINE_CMD:-not available}$(command -v ${WINE_CMD%% *} >/dev/null 2>&1 && [ "$ARCH" != aarch64 ] && echo "  ($(wine --version 2>/dev/null))")"
+[ -f "$OPT/cnc-ddraw/ddraw.dll" ] && echo "   Old DirectDraw:    cnc-ddraw in $OPT/cnc-ddraw"
+echo "   Details of this run: $ILOG"
 echo "   Double-click a .exe, .com, .bat or .msi file; exe-handler picks Wine or DOSBox-X by itself."
 echo "   Right-click > 'Open in DOSBox' / 'Open in Wine' forces a choice. Log: ~/.cache/exe-handler.log"
 [ "${NEED_REBOOT:-0}" = 1 ] && warn "Reboot the Raspberry Pi to use the 4K kernel before starting Windows programs."
