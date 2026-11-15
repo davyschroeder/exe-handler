@@ -69,8 +69,10 @@ Pi-Apps-Coders; op andere distributies wordt Box64 uit de broncode gebouwd.
   een crash).
 - **Geen haperen bij het starten van een Windows-programma**: start Wine vanaf nul, dan leest het een tiental keer
   alle monitoren opnieuw uit en bij meerdere schermen staat het bureaublad daarbij telkens even stil (gemeten:
-  12 keer, samen 2 seconden). exe-handler laat de Wine-server daarom aanstaan en zet Wine 20 seconden na het
-  inloggen alvast klaar (`exe-handler --warmup`, via `/etc/xdg/autostart`).
+  12 keer, samen 2 seconden). exe-handler laat de Wine-server daarom aanstaan na het eerste Windows-programma: alleen
+  dat eerste programma van een sessie hapert nog. Met `./install.sh --warmup-at-login` wordt Wine 20 seconden na
+  het inloggen alvast klaargezet en start ook het eerste programma soepel (weer weg met `--no-warmup-at-login`).
+  Standaard staat dat uit; het installatiescript geeft een tip als het meer dan één scherm ziet.
 - **Oude DirectDraw-spellen** (Windows 95-XP, bijvoorbeeld Jazz Jackrabbit 2) vragen het scherm om 320x200 of
   640x480 in 256 kleuren; moderne schermen weigeren dat ("Could not set video mode"). Op x86 zet exe-handler
   eenmalig [cnc-ddraw](https://github.com/FunkyFr3sh/cnc-ddraw) (`ddraw.dll` + `ddraw.ini`) naast het spel: het

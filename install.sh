@@ -5,15 +5,19 @@
 # Options:  --yes        no questions (accept defaults)
 #           --dry-run    only show what would happen
 #           --no-binfmt  do not register .exe files with the kernel (see README)
+#           --warmup-at-login     get Wine ready in the background after every login: with several monitors the
+#                                 first Windows program then starts without stutter (--no-warmup-at-login removes it)
 #           --update     only replace the exe-handler program with the newest version from GitHub
 set -euo pipefail
 
-YES=0; DRY=0; BINFMT=1; UPDATE=0
+YES=0; DRY=0; BINFMT=1; WARMUP=0; UPDATE=0
 for a in "$@"; do
   case "$a" in
     --yes|-y) YES=1 ;;
     --dry-run|-n) DRY=1 ;;
     --no-binfmt) BINFMT=0 ;;
+    --warmup-at-login) WARMUP=1 ;;
+    --no-warmup-at-login) WARMUP=-1 ;;
     --update|-u) UPDATE=1 ;;
     -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
     *) echo "Unknown option: $a" >&2; exit 2 ;;
@@ -355,10 +359,21 @@ if command -v xdg-mime >/dev/null && [ "$TARGET_USER" != root ]; then
   for m in ${MIMES//;/ }; do as_user xdg-mime default exe-handler.desktop "$m"; done
 fi
 
-# ---------- Wine ready at login: no stutter when a Windows program starts ----------
-if [ -n "$WINE_CMD" ]; then
+# ---------- Wine ready at login (optional): no stutter at the first Windows program ----------
+# The wineserver always stays on after the first Windows program, so only that first start of a session reads all
+# monitors. With several monitors that freezes the desktop a few times; --warmup-at-login moves it to the login.
+AUTOSTART=/etc/xdg/autostart/exe-handler-warmup.desktop
+MONITORS=$( { xrandr --current 2>/dev/null | grep -c ' connected'; } || true)
+if [ -n "$WINE_CMD" ] && [ $WARMUP = 1 ]; then
   doing "autostart entry: Wine gets ready in the background 20 seconds after login (exe-handler --warmup)"
-  run bash -c "printf '[Desktop Entry]\nType=Application\nName=exe-handler warmup\nComment=Get Wine ready so Windows programs start without stutter\nExec=$BIN --warmup\nNoDisplay=true\nX-GNOME-Autostart-Delay=20\n' | $SUDO tee /etc/xdg/autostart/exe-handler-warmup.desktop >/dev/null"
+  run bash -c "printf '[Desktop Entry]\nType=Application\nName=exe-handler warmup\nComment=Get Wine ready so Windows programs start without stutter\nExec=$BIN --warmup\nNoDisplay=true\nX-GNOME-Autostart-Delay=20\n' | $SUDO tee $AUTOSTART >/dev/null"
+elif [ $WARMUP = -1 ] && [ -e $AUTOSTART ]; then
+  doing "removing the autostart entry (Wine is no longer made ready at login)"
+  sudo_run rm -f $AUTOSTART
+elif [ -e $AUTOSTART ]; then
+  echo "   =  Wine is made ready at login (chosen earlier; remove with --no-warmup-at-login)"
+elif [ -n "$WINE_CMD" ] && [ "${MONITORS:-0}" -gt 1 ]; then
+  TIP_WARMUP=1
 fi
 
 # ---------- kernel: let .exe files run like normal programs ----------
@@ -394,6 +409,10 @@ echo "   DOS programs:      ${DOSBOX_CMD:-not available}"
 echo "   Windows programs:  ${WINE_CMD:-not available}$(command -v ${WINE_CMD%% *} >/dev/null 2>&1 && [ "$ARCH" != aarch64 ] && echo "  ($(wine --version 2>/dev/null))")"
 [ -f "$OPT/cnc-ddraw/ddraw.dll" ] && echo "   Old DirectDraw:    cnc-ddraw in $OPT/cnc-ddraw"
 echo "   Details of this run: $ILOG"
+if [ "${TIP_WARMUP:-0}" = 1 ]; then
+  echo "   Tip: this computer has $MONITORS monitors. The first Windows program after login can make the desktop"
+  echo "        stutter for a second or two. Run  ./install.sh --warmup-at-login  to move that to the login."
+fi
 echo "   Double-click a .exe, .com, .bat or .msi file; exe-handler picks Wine or DOSBox-X by itself."
 echo "   Right-click > 'Open in DOSBox' / 'Open in Wine' forces a choice. Log: ~/.cache/exe-handler.log"
 [ "${NEED_REBOOT:-0}" = 1 ] && warn "Reboot the Raspberry Pi to use the 4K kernel before starting Windows programs."
