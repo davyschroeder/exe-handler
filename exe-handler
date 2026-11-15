@@ -384,6 +384,34 @@ def auto_desktop(path):
     return f"{w}x{h}"
 
 
+def unfullscreen_desktop(name, size):
+    """Wine 10 shows a virtual desktop as a borderless fullscreen window on one monitor, with the program in the
+    top-left corner. Turn it back into a normal window with a title bar of the asked size (needs wmctrl, X11)."""
+    if not (os.environ.get("DISPLAY") and shutil.which("wmctrl")):
+        return
+    import threading
+
+    def work():
+        title = f"{name} - Wine Desktop"
+        for _ in range(60):
+            time.sleep(0.5)
+            try:
+                rows = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True, timeout=5).stdout.splitlines()
+            except (OSError, subprocess.TimeoutExpired):
+                return
+            ids = [r.split()[0] for r in rows if r.rstrip().endswith(title)]
+            if ids:
+                w, h = size.split("x")
+                time.sleep(1.5)
+                subprocess.run(["wmctrl", "-i", "-r", ids[0], "-b", "remove,fullscreen"], stderr=subprocess.DEVNULL)
+                time.sleep(1)
+                subprocess.run(["wmctrl", "-i", "-r", ids[0], "-e", f"0,-1,-1,{w},{h}"], stderr=subprocess.DEVNULL)
+                log(f"virtual desktop window {ids[0]} set to a normal {size} window")
+                return
+
+    threading.Thread(target=work, daemon=True).start()
+
+
 def run_wine(path, args, console, msi=False, prefix=None, e=None):
     if not page_size_ok():
         return 1
@@ -409,8 +437,10 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
         log(f"runtime DLLs found one folder up: WINEPATH={extra}")
     size = None if (prefix or msi) else (virtual_desktop(path) or auto_desktop(path))
     if size:
-        prefix = ["explorer", f"/desktop={os.path.splitext(os.path.basename(path))[0]},{size}"]
+        name = os.path.splitext(os.path.basename(path))[0]
+        prefix = ["explorer", f"/desktop={name},{size}"]
         log(f"virtual desktop {size}")
+        unfullscreen_desktop(name, size)
     cmd = WINE + (prefix or []) + (["msiexec", "/i"] if msi else []) + [path] + args
     cwd = os.path.dirname(path)
     log("run " + shlex.join(cmd))

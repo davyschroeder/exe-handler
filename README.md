@@ -73,6 +73,8 @@ Pi-Apps-Coders; op andere distributies wordt Box64 uit de broncode gebouwd.
   exe-handler kiest de snelheid naar het jaartal van het programma (jaren 80: 3000 cycles, 1994 en later: 20000);
   zet zelf een getal bij `cycles` in `dos.conf` om dat vast te zetten.
 - **Afsluiten van DOSBox-X** vraagt niet meer om bevestiging.
+- **Het eigen venster voor Visual Basic-programma's**: Wine 10 toont zo'n virtueel bureaublad schermvullend en zonder
+  rand op één monitor; exe-handler maakt er weer een gewoon venster met titelbalk van (via `wmctrl`, op X11).
 - **Visual Basic-runtime één map hoger** (zoals op shareware-cd's, `VBRUN300.DLL` naast de spelmappen) wordt gevonden.
 
 ### Per programma aanpassen (optioneel)
