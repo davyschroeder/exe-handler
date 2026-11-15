@@ -97,3 +97,7 @@ Third-party software that the installer downloads: [Wine](https://www.winehq.org
 [Kron4ek](https://github.com/Kron4ek/Wine-Builds), [Box64](https://github.com/ptitSeb/box64) via
 [Pi-Apps-Coders/box64-debs](https://github.com/Pi-Apps-Coders/box64-debs),
 [otvdm/winevdm](https://github.com/otya128/winevdm), [DOSBox-X](https://dosbox-x.com).
+
+## Licentie / License
+
+MIT, zie / see [LICENSE](LICENSE).
