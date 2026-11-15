@@ -154,17 +154,75 @@ WINDOW_REG = r"""REGEDIT4
 "Managed"="Y"
 "GrabFullscreen"="N"
 "UseXRandR"="Y"
+"EmulateModeset"="Y"
 
 [HKEY_CURRENT_USER\Software\Wine\DirectInput]
 "MouseWarpOverride"="enable"
 """
 
 
+WINDOW_REG_VERSION = 4      # raise when WINDOW_REG changes: it is then imported again into existing Wine folders
+
+
+def window_settings(e):
+    """Import WINDOW_REG once per Wine folder (also into one that existed before exe-handler was installed):
+    title bar from the desktop (maximise/minimise/close work), no mouse grab in fullscreen (Alt+Tab works), and
+    EmulateModeset (Wine 10+): a game that switches to 640x480 gets a scaled picture, the real monitor keeps its
+    resolution. Without it an old fullscreen game changes the monitor and rearranges a multi-monitor desktop."""
+    import hashlib
+    mark = os.path.join(USER_DIR, f"window-v{WINDOW_REG_VERSION}-{hashlib.sha1(e['WINEPREFIX'].encode()).hexdigest()[:8]}")
+    if os.path.exists(mark):
+        return
+    os.makedirs(USER_DIR, exist_ok=True)
+    reg = os.path.join(USER_DIR, "window.reg")
+    with open(reg, "w") as f:
+        f.write(WINDOW_REG)
+    wine("regedit", "/S", "Z:" + reg.replace("/", "\\"), e=e)
+    open(mark, "w").close()
+    log(f"window settings v{WINDOW_REG_VERSION} imported into {e['WINEPREFIX']}")
+
+
+def monitors():
+    """{output: (mode, position, rate)} of the active monitors, from xrandr; {} when unknown."""
+    if not (os.environ.get("DISPLAY") and shutil.which("xrandr")):
+        return {}
+    out, cur = {}, None
+    try:
+        text = subprocess.run(["xrandr", "--current"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    for line in text.splitlines():
+        w = line.split()
+        if len(w) > 2 and w[1] == "connected":
+            geo = next((x for x in w[2:5] if "x" in x and "+" in x), None)
+            cur = w[0] if geo else None
+            if geo:
+                mode, x, y = geo.split("+")
+                out[cur] = [mode, f"{x}x{y}", None, "primary" in w[2:4]]
+        elif cur and line.startswith("   ") and "*" in line:
+            out[cur][2] = next((x.strip("*+") for x in w[1:] if "*" in x), None)
+            cur = None
+    return out
+
+
+def restore_monitors(before):
+    """Safety net: a game that crashed (or was killed) in fullscreen can leave a monitor at 640x480."""
+    after = monitors()
+    if not before or after == before:
+        return
+    cmd = ["xrandr"]
+    for name, (mode, pos, rate, primary) in before.items():
+        cmd += ["--output", name, "--mode", mode, "--pos", pos] + (["--rate", rate] if rate else []) + \
+               (["--primary"] if primary else [])
+    log("monitor layout changed by the program, restoring: " + shlex.join(cmd))
+    subprocess.run(cmd, stderr=subprocess.DEVNULL)
+
+
 def prefix_ready(e):
-    """Create the Wine folder (prefix) on first use, with normal window behaviour:
-    title bar from the desktop (so maximise/minimise/close work), no mouse grab in fullscreen (Alt+Tab works)."""
+    """Create the Wine folder (prefix) on first use."""
     k32 = os.path.join(e["WINEPREFIX"], "drive_c/windows/system32/kernel32.dll")
     if os.path.exists(k32):
+        window_settings(e)
         return True
     log(f"creating Wine prefix {e['WINEPREFIX']}")
     if has_display():
@@ -173,11 +231,8 @@ def prefix_ready(e):
                                         "Wine wordt klaargezet (alleen de eerste keer, duurt een minuut)...")],
                          stderr=subprocess.DEVNULL) if shutil.which("zenity") else None
     wine("wineboot", "-u", e=e, timeout=900)
-    reg = os.path.join(USER_DIR, "window.reg")
-    os.makedirs(USER_DIR, exist_ok=True)
-    with open(reg, "w") as f:
-        f.write(WINDOW_REG)
-    wine("regedit", "/S", "Z:" + reg.replace("/", "\\"), e=e)
+    if os.path.exists(k32):
+        window_settings(e)
     return os.path.exists(k32)
 
 
@@ -263,6 +318,20 @@ def is_visual_basic(path):
     return any(n.startswith(r.decode()) and n.endswith(".dll") for n in here for r in VB_RUNTIMES)
 
 
+def runtime_in_parent(path):
+    """Shareware CDs often keep one copy of the Visual Basic runtime (VBRUN300.DLL ...) in the folder above the
+    games. Windows found it through its own system folder; give Wine that parent folder as an extra search path."""
+    d = os.path.dirname(path)
+    up = os.path.dirname(d)
+    try:
+        here = {n.lower() for n in os.listdir(d)}
+        above = [n.lower() for n in os.listdir(up)]
+    except OSError:
+        return None
+    vb = [n for n in above if n.endswith(".dll") and any(n.startswith(r.decode()) for r in VB_RUNTIMES)]
+    return up if vb and not any(n in here for n in vb) else None
+
+
 def screen_size():
     """Total desktop size in pixels (all monitors together), or None.
     xrandr (X11 and XWayland), then xdpyinfo, then the monitors the kernel reports (also without X)."""
@@ -333,6 +402,11 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
     if reg:
         wine("regedit", "/S", "Z:" + reg.replace("/", "\\"), e=e)
         log(f"registry imported: {reg}")
+    extra = runtime_in_parent(path) if is_visual_basic(path) else None
+    if extra:
+        e = dict(e)
+        e["WINEPATH"] = extra + (";" + e["WINEPATH"] if e.get("WINEPATH") else "")
+        log(f"runtime DLLs found one folder up: WINEPATH={extra}")
     size = None if (prefix or msi) else (virtual_desktop(path) or auto_desktop(path))
     if size:
         prefix = ["explorer", f"/desktop={os.path.splitext(os.path.basename(path))[0]},{size}"]
@@ -345,8 +419,12 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
     if console:
         cmd = terminal(cmd)
     start = time.time()
-    with open(LOG, "a") as lf:
-        rc = subprocess.run(cmd, cwd=cwd, env=e, stdout=lf, stderr=lf).returncode
+    before = monitors()
+    try:
+        with open(LOG, "a") as lf:
+            rc = subprocess.run(cmd, cwd=cwd, env=e, stdout=lf, stderr=lf).returncode
+    finally:
+        restore_monitors(before)
     log(f"wine finished rc={rc} after {time.time() - start:.0f}s")
     if rc not in (0, None) and time.time() - start < 5:
         tell(T(f"{os.path.basename(path)} stopped right away (code {rc}). See ~/.cache/exe-handler.log",
@@ -366,7 +444,9 @@ def run_win16(path, args):
 
 
 DOS_CONF = """# DOSBox-X settings for exe-handler (DOS programs and games). Edit freely.
-# Alt+Enter = fullscreen on/off. The window can be resized and maximised; the picture scales along.
+# F12+F = fullscreen on/off (F12 is the DOSBox-X host key). The window can be resized and maximised;
+# the picture scales along. With "cycles = auto" exe-handler picks a speed from the age of the program
+# (see dos_cycles in exe-handler); set a number here (e.g. cycles = 8000) to fix the speed yourself.
 [sdl]
 autolock         = false
 showmenu         = false
@@ -374,6 +454,7 @@ fullresolution   = desktop
 windowresolution = original
 output           = opengl
 [dosbox]
+quit warning = false
 machine = svga_s3
 memsize = 32
 [cpu]
@@ -388,6 +469,55 @@ scaler = normal2x
 """
 
 
+def dos_safe_dir(d):
+    """DOSBox(-X) cuts a mount path at ':' (and DOSBox at some other characters). Folders on a network share
+    opened in the file manager look like /run/user/1000/gvfs/smb-share:server=nas,share=games/..., so mount
+    such a folder through a plain symlink in ~/.cache/exe-handler/dos/."""
+    if not any(c in d for c in ':"'):
+        return d
+    import hashlib
+    links = f"{HOME}/.cache/exe-handler/dos"
+    os.makedirs(links, exist_ok=True)
+    safe = "".join(c if c.isalnum() else "_" for c in os.path.basename(d))[:24] or "dir"
+    link = os.path.join(links, f"{safe}-{hashlib.sha1(d.encode()).hexdigest()[:8]}")
+    if not os.path.islink(link):
+        os.symlink(d, link)
+    log(f"mount through link {link} -> {d}")
+    return link
+
+
+def conf_has(conf, key):
+    try:
+        return any(l.split("=")[0].strip() == key for l in open(conf))
+    except OSError:
+        return False
+
+
+def dos_cycles(path, conf):
+    """Speed for real-mode DOS programs. DOSBox's own 'auto' gives them 3000 cycles (a slow 286), which is right
+    for games from the 1980s but far too slow for 1990s games. Guess from the date of the program file;
+    protected-mode games (DOS4GW etc.) get 90% of what the computer can do. Only when dos.conf says cycles = auto."""
+    try:
+        own = [l.split("=", 1)[1].strip() for l in open(conf) if l.split("=")[0].strip() == "cycles"]
+    except OSError:
+        own = []
+    if own and own[-1] != "auto":
+        return None
+    year = time.localtime(os.path.getmtime(path)).tm_year
+    if year < 1989:
+        n = 3000
+    elif year < 1992:
+        n = 6000
+    elif year < 1994:
+        n = 12000
+    elif year < 2000:
+        n = 20000
+    else:
+        n = 12000          # date unknown (file copied without its date)
+    log(f"DOS speed: program dated {year} -> cycles auto {n} 90%")
+    return f"auto {n} 90%"
+
+
 def run_dos(path, args):
     if not shutil.which(DOSBOX[0]):
         tell(T("DOSBox is not installed. Run install.sh from exe-handler first.",
@@ -399,9 +529,13 @@ def run_dos(path, args):
         with open(conf, "w") as f:
             f.write(DOS_CONF)
     d, name = os.path.split(path)
+    d = dos_safe_dir(d)
     run = " ".join([f'"{name}"' if " " in name else name] + args)
     x = any("dosbox-x" in w.lower() for w in DOSBOX)
+    cyc = dos_cycles(path, conf)
     cmd = DOSBOX + (["-conf", conf, "-fastlaunch", "-nopromptfolder"] if x else []) + \
+        (["-set", f"cpu cycles={cyc}"] if x and cyc else []) + \
+        (["-set", "dosbox quit warning=false"] if x and not conf_has(conf, "quit warning") else []) + \
         ["-c", f'mount c "{d}"', "-c", "c:", "-c", run, "-c", "exit"]
     log("run " + shlex.join(cmd))
     with open(LOG, "a") as lf:

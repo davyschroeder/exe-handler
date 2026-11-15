@@ -58,10 +58,22 @@ Pi-Apps-Coders; op andere distributies wordt Box64 uit de broncode gebouwd.
 - **Oude Visual Basic-programma's** (VB3 t/m VB6) crashen met *"Run-time error 6: Overflow"* op schermen breder
   of hoger dan 2184 pixels (ook twee monitoren naast elkaar). exe-handler herkent ze en start ze altijd in een
   eigen venster van 1600x900 (kleiner als je scherm kleiner is).
-- **DOS-programma's**: venster dat je kunt vergroten/maximaliseren (het beeld schaalt mee), **Alt+Enter** = volledig
+- **DOS-programma's**: venster dat je kunt vergroten/maximaliseren (het beeld schaalt mee), **F12+F** = volledig
   scherm aan/uit, de muis wordt niet gevangen. Het DOSBox-X-menu is verborgen; instellingen staan in
   `~/.config/exe-handler/dos.conf`.
 - Programma's gebouwd voor Windows 95 t/m XP krijgen automatisch Windows-versie "XP" (minder installatiefouten).
+
+- **Spellen die de schermresolutie wisselen** (oude DirectDraw-spellen naar 640x480): Wine 10 en nieuwer bootst die
+  wissel na (`EmulateModeset`), je echte monitor en de indeling van meerdere schermen blijven zoals ze zijn. Als
+  vangnet zet exe-handler na afloop de monitoren terug als een programma ze toch heeft veranderd (bijvoorbeeld na
+  een crash).
+- **Programma's op een netwerkshare** die je in Bestanden opent (`smb://...`): DOSBox-X kan niet tegen de dubbele
+  punt in zo'n pad; exe-handler koppelt de map via een snelkoppeling in `~/.cache/exe-handler/dos/`.
+- **Snelheid van DOS-spellen**: DOSBox geeft oude (real-mode) spellen standaard de snelheid van een trage 286.
+  exe-handler kiest de snelheid naar het jaartal van het programma (jaren 80: 3000 cycles, 1994 en later: 20000);
+  zet zelf een getal bij `cycles` in `dos.conf` om dat vast te zetten.
+- **Afsluiten van DOSBox-X** vraagt niet meer om bevestiging.
+- **Visual Basic-runtime één map hoger** (zoals op shareware-cd's, `VBRUN300.DLL` naast de spelmappen) wordt gevonden.
 
 ### Per programma aanpassen (optioneel)
 
