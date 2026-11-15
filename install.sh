@@ -131,8 +131,12 @@ pkg_try() {
 [ $BINFMT = 1 ] || TOTAL=$((TOTAL - 1))
 echo "   Everything that runs quietly is written to $ILOG"
 if [ -n "$SUDO" ] && [ $DRY = 0 ]; then
-  doing "asking for your password once (sudo); it is remembered until the script is done"
-  sudo -v || die "sudo is needed to install programs"
+  if sudo -n true 2>/dev/null; then
+    doing "sudo works without a password here"
+  else
+    doing "asking for your password once (sudo); it is remembered until the script is done"
+    sudo -v || die "sudo is needed to install programs"
+  fi
   ( while sleep 50; do sudo -n true 2>/dev/null || exit; done ) &     # keep sudo alive during long steps
   KEEP=$!; trap 'kill $KEEP 2>/dev/null' EXIT
 fi
