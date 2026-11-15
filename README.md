@@ -79,8 +79,8 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
   (`EmulateModeset`), je echte monitor en de indeling van meerdere schermen blijven zoals ze zijn. Als vangnet zet
   exe-handler na afloop de monitoren terug als een programma ze toch heeft veranderd (bijvoorbeeld na een crash).
 - **Oude Visual Basic-programma's** (VB3 t/m VB6) crashen met *"Run-time error 6: Overflow"* op schermen breder
-  of hoger dan 2184 pixels (ook twee monitoren naast elkaar). exe-handler herkent ze en start ze in een eigen
-  Wine-bureaublad van 1600x900 (kleiner als je scherm kleiner is). Wine 10 toont dat schermvullend en zonder rand;
+  of hoger dan 2184 pixels (ook twee monitoren naast elkaar). Is je hele bureaublad kleiner, dan draaien ze gewoon direct.
+  Anders start exe-handler ze in een eigen Wine-bureaublad van 1600x900. Wine 10 toont dat schermvullend en zonder rand;
   exe-handler maakt er een gewoon venster met titelbalk van dat precies om het programma past, en schuift Wine's
   eigen titelbalk uit beeld, zodat je één venster ziet (op X11).
 - **Visual Basic-runtime één map hoger** (zoals op shareware-cd's, `VBRUN300.DLL` naast de spelmappen) wordt gevonden.
@@ -114,6 +114,7 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
 | `exe-handler.reg` | naast de .exe | registerbestand dat vóór elke start wordt ingelezen |
 | `exe-handler.no-ddraw` | naast de .exe | leeg bestand: geen cnc-ddraw voor dit spel |
 | `virtual-desktop.conf` | `~/.config/exe-handler/` | `spel.exe 1024x768`: in een eigen Wine-bureaublad van die grootte |
+| `x11.conf` | `~/.config/exe-handler/` | `spel.exe` per regel: op een Wayland-bureaublad toch Wine's X11-weergave gebruiken (muis in sommige spellen) |
 | `dos.conf` | `~/.config/exe-handler/` | DOSBox-X-instellingen |
 
 Logboek: `~/.cache/exe-handler.log`. Werkt iets niet zoals verwacht, dan laat `exe-handler --check bestand.exe`

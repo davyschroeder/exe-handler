@@ -19,6 +19,7 @@ Per program (optional, put next to the .exe):
   exe-handler.reg     registry file imported before every start
 Per user (optional):
   ~/.config/exe-handler/virtual-desktop.conf   "game.exe 1024x768": run inside a Wine virtual desktop window
+  ~/.config/exe-handler/x11.conf               "game.exe": use Wine's X11 driver on a Wayland desktop
   ~/.config/exe-handler/dos.conf               DOSBox-X settings (created on first DOS start)
 System settings (written by install.sh): /etc/exe-handler.conf
 """
@@ -313,6 +314,15 @@ def alias(path):
     return path
 
 
+def listed(name, path):
+    """Is this program named in ~/.config/exe-handler/<name> (one exe name per line)?"""
+    try:
+        names = [l.split("#")[0].strip().lower() for l in open(os.path.join(USER_DIR, name))]
+    except OSError:
+        return False
+    return os.path.basename(path).lower() in names
+
+
 def virtual_desktop(path):
     try:
         for line in open(os.path.join(USER_DIR, "virtual-desktop.conf")):
@@ -324,6 +334,7 @@ def virtual_desktop(path):
     return None
 
 
+VB_LIMIT = 32767 // 15          # 2184 pixels: Visual Basic keeps screen sizes in twips (15 per pixel) in 16 bits
 VB_RUNTIMES = (b"vbrun100", b"vbrun200", b"vbrun300", b"vb40016", b"vb40032", b"msvbvm50", b"msvbvm60")
 
 
@@ -401,6 +412,8 @@ def auto_desktop(path):
     if not is_visual_basic(path):
         return None
     size = screen_size()
+    if size and size[0] <= VB_LIMIT and size[1] <= VB_LIMIT:
+        return None                     # the whole desktop is small enough: no overflow possible, run it directly
     w, h = 1600, 900
     if size:
         w, h = min(w, size[0] - 40), min(h, size[1] - 80)
@@ -645,6 +658,11 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
     size = None if (prefix or msi) else (virtual_desktop(path) or auto_desktop(path))
     if not (size or prefix or msi):
         e = cnc_ddraw(path, e)
+    if (size or listed("x11.conf", path)) and e.get("DISPLAY") and e.get("WAYLAND_DISPLAY"):
+        # Wine's Wayland driver has no virtual desktop, and some games need X11 for the mouse: use the X11 driver
+        e = dict(e)
+        e.pop("WAYLAND_DISPLAY")
+        log("Wine X11 driver for this program (virtual desktop or listed in x11.conf)")
     if size:
         name = os.path.splitext(os.path.basename(path))[0]
         prefix = ["explorer", f"/desktop={name},{size}"]
