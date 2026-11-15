@@ -1,0 +1,398 @@
+#!/usr/bin/env python3
+"""exe-handler: open a Windows or DOS program on Linux with the right tool.
+
+It reads the file header instead of guessing from the name:
+  64-bit Windows (PE32+)            -> Wine            (on ARM: Wine via Box64)
+  32-bit Windows (PE32)             -> Wine            (on ARM: Wine via Box64, WoW64)
+  16-bit Windows (NE)               -> Wine; on ARM via otvdm (emulates the 16-bit CPU)
+  DOS (MZ, LE/LX extenders, .com)   -> DOSBox-X (or DOSBox)
+  .msi                              -> Wine msiexec
+  .bat                              -> DOSBox-X
+Console programs open in a terminal window. Everything is logged to ~/.cache/exe-handler.log.
+
+Usage: exe-handler [--dos|--wine] FILE [args...]
+
+Per program (optional, put next to the .exe):
+  exe-handler.start   lines "A.exe = B.exe": start B.exe when A.exe is opened (e.g. a mod loader)
+  exe-handler.reg     registry file imported before every start
+Per user (optional):
+  ~/.config/exe-handler/virtual-desktop.conf   "game.exe 1024x768": run inside a Wine virtual desktop window
+  ~/.config/exe-handler/dos.conf               DOSBox-X settings (created on first DOS start)
+System settings (written by install.sh): /etc/exe-handler.conf
+"""
+import os, shlex, shutil, struct, subprocess, sys, time
+
+HOME = os.path.expanduser("~")
+CONF = os.environ.get("EXE_HANDLER_CONF", "/etc/exe-handler.conf")
+USER_DIR = f"{HOME}/.config/exe-handler"
+LOG = f"{HOME}/.cache/exe-handler.log"
+NL = os.environ.get("LANG", "").startswith("nl") or os.environ.get("LANGUAGE", "").startswith("nl")
+
+
+def T(en, nl):
+    return nl if NL else en
+
+
+def settings():
+    """KEY=value lines from /etc/exe-handler.conf (values are shell-style words)."""
+    s = {"WINE": "wine", "DOSBOX": "dosbox-x", "OTVDM": "", "ARCH": os.uname().machine}
+    try:
+        for line in open(CONF):
+            line = line.split("#", 1)[0].strip()
+            if "=" in line:
+                k, v = line.split("=", 1)
+                s[k.strip()] = v.strip().strip('"')
+    except OSError:
+        pass
+    return s
+
+
+S = settings()
+WINE = shlex.split(S["WINE"])          # e.g. ["wine"] or ["box64", "/opt/exe-handler/wine/bin/wine"]
+DOSBOX = shlex.split(S["DOSBOX"])      # e.g. ["dosbox-x"], ["flatpak", "run", "com.dosbox_x.DOSBox-X"], ["dosbox"]
+OTVDM = S["OTVDM"]                     # folder with otvdm (16-bit Windows on ARM), empty on x86
+IS_X86 = S["ARCH"] in ("x86_64", "i686", "i386", "amd64")
+
+
+def log(msg):
+    os.makedirs(os.path.dirname(LOG), exist_ok=True)
+    with open(LOG, "a") as f:
+        f.write(time.strftime("%F %T ") + msg + "\n")
+
+
+def has_display():
+    return bool(os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY"))
+
+
+def tell(msg, error=False):
+    """Message in a dialog (also when started from the file manager), else on the terminal."""
+    log(("ERROR: " if error else "") + msg)
+    if has_display():
+        for tool, args in (("zenity", ["--error" if error else "--info", "--no-wrap", "--title=EXE", f"--text={msg}"]),
+                           ("kdialog", ["--error" if error else "--msgbox", msg, "--title", "EXE"]),
+                           ("notify-send", ["EXE", msg])):
+            if shutil.which(tool):
+                subprocess.run([tool] + args, stderr=subprocess.DEVNULL)
+                return
+    print(msg, file=sys.stderr)
+
+
+def kind(path):
+    """('win64'|'win32'|'win16'|'dos'|'msi'|'bat', console: bool)"""
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".msi":
+        return "msi", False
+    if ext == ".bat":
+        return "bat", True
+    with open(path, "rb") as f:
+        head = f.read(64)
+        if head[:2] not in (b"MZ", b"ZM"):
+            return "dos", True                      # headerless .com image
+        off = struct.unpack("<I", head[60:64])[0] if len(head) >= 64 else 0
+        f.seek(off)
+        sig = f.read(4)
+        if sig == b"PE\0\0":
+            coff = f.read(20)
+            machine = struct.unpack("<H", coff[0:2])[0]
+            opt = f.read(70)
+            magic = struct.unpack("<H", opt[0:2])[0]
+            subsystem = struct.unpack("<H", opt[68:70])[0] if len(opt) >= 70 else 2
+            console = subsystem == 3
+            if magic == 0x20B or machine in (0x8664, 0xAA64):
+                return "win64", console
+            return "win32", console
+        if sig[:2] == b"NE":
+            return "win16", False
+        return "dos", True                          # plain MZ, LE/LX (DOS extenders)
+
+
+def pe_os_version(path):
+    """(major, minor) OS version the program was built for (PE subsystem version), or None."""
+    try:
+        with open(path, "rb") as f:
+            h = f.read(64)
+            f.seek(struct.unpack("<I", h[60:64])[0])
+            if f.read(4) != b"PE\0\0":
+                return None
+            f.read(20)
+            opt = f.read(52)
+            return struct.unpack("<HH", opt[48:52])
+    except (OSError, struct.error):
+        return None
+
+
+def env_wine():
+    e = dict(os.environ)
+    e.setdefault("WINEPREFIX", f"{HOME}/.wine")
+    e.setdefault("WINEDEBUG", "-all")
+    e.setdefault("BOX64_LOG", "0")
+    e.setdefault("BOX64_NOBANNER", "1")
+    return e
+
+
+def wine(*args, e=None, timeout=300):
+    return subprocess.run(WINE + list(args), env=e or env_wine(), stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL, timeout=timeout)
+
+
+def page_size_ok():
+    if IS_X86 or os.sysconf("SC_PAGE_SIZE") == 4096:
+        return True
+    tell(T("Wine does not work with this kernel (16K memory pages).\n"
+           "On a Raspberry Pi 5: add the line  kernel=kernel8.img  to /boot/firmware/config.txt and reboot.",
+           "Wine werkt niet met deze kernel (16K-geheugenpagina's).\n"
+           "Op een Raspberry Pi 5: zet de regel  kernel=kernel8.img  in /boot/firmware/config.txt en herstart."),
+         error=True)
+    return False
+
+
+WINDOW_REG = r"""REGEDIT4
+
+[HKEY_CURRENT_USER\Software\Wine\X11 Driver]
+"Decorated"="Y"
+"Managed"="Y"
+"GrabFullscreen"="N"
+"UseXRandR"="Y"
+
+[HKEY_CURRENT_USER\Software\Wine\DirectInput]
+"MouseWarpOverride"="enable"
+"""
+
+
+def prefix_ready(e):
+    """Create the Wine folder (prefix) on first use, with normal window behaviour:
+    title bar from the desktop (so maximise/minimise/close work), no mouse grab in fullscreen (Alt+Tab works)."""
+    k32 = os.path.join(e["WINEPREFIX"], "drive_c/windows/system32/kernel32.dll")
+    if os.path.exists(k32):
+        return True
+    log(f"creating Wine prefix {e['WINEPREFIX']}")
+    if has_display():
+        subprocess.Popen(["zenity", "--info", "--no-wrap", "--timeout=20", "--title=EXE",
+                          "--text=" + T("Preparing Wine (first start only, takes a minute)...",
+                                        "Wine wordt klaargezet (alleen de eerste keer, duurt een minuut)...")],
+                         stderr=subprocess.DEVNULL) if shutil.which("zenity") else None
+    wine("wineboot", "-u", e=e, timeout=900)
+    reg = os.path.join(USER_DIR, "window.reg")
+    os.makedirs(USER_DIR, exist_ok=True)
+    with open(reg, "w") as f:
+        f.write(WINDOW_REG)
+    wine("regedit", "/S", "Z:" + reg.replace("/", "\\"), e=e)
+    return os.path.exists(k32)
+
+
+def terminal(cmd):
+    """Run a console program in a terminal window that stays open afterwards."""
+    inner = f"{shlex.join(cmd)}; echo; read -n1 -rsp '{T('Done. Press a key to close...', 'Klaar. Druk op een toets om te sluiten...')}'"
+    for t, flag in (("x-terminal-emulator", "-e"), ("gnome-terminal", "--"), ("konsole", "-e"),
+                    ("xfce4-terminal", "-x"), ("lxterminal", "-e"), ("mate-terminal", "-x"), ("xterm", "-e")):
+        if shutil.which(t):
+            return [t, flag, "bash", "-c", inner]
+    return cmd
+
+
+def auto_settings(path, e):
+    """Once per program: programs built for Windows 95-XP get Windows version 'winxp' (fewer setup errors)."""
+    done_file = os.path.join(USER_DIR, "auto-done.txt")
+    key = f"{e['WINEPREFIX']}|{os.path.basename(path).lower()}"
+    try:
+        done = set(l.strip() for l in open(done_file))
+    except OSError:
+        done = set()
+    if key in done:
+        return
+    ver = pe_os_version(path)
+    if ver and ver[0] < 6:
+        wine("reg", "add", f"HKCU\\Software\\Wine\\AppDefaults\\{os.path.basename(path)}", "/v", "Version",
+             "/t", "REG_SZ", "/d", "winxp", "/f", e=e)
+        log(f"auto: {os.path.basename(path)} built for Windows {ver[0]}.{ver[1]} -> winxp")
+    os.makedirs(USER_DIR, exist_ok=True)
+    with open(done_file, "a") as f:
+        f.write(key + "\n")
+
+
+def next_to(path, *names):
+    for n in names:
+        p = os.path.join(os.path.dirname(path), n)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def alias(path):
+    """exe-handler.start next to the program: 'A.exe = B.exe' starts B when A is opened."""
+    f = next_to(path, "exe-handler.start", "run-exe.start")
+    if f:
+        for line in open(f, errors="replace"):
+            if "=" in line and not line.lstrip().startswith("#"):
+                a, b = (x.strip() for x in line.split("=", 1))
+                target = os.path.join(os.path.dirname(path), b)
+                if a.lower() == os.path.basename(path).lower() and os.path.exists(target):
+                    log(f"start alias: {a} -> {b}")
+                    return target
+    return path
+
+
+def virtual_desktop(path):
+    try:
+        for line in open(os.path.join(USER_DIR, "virtual-desktop.conf")):
+            parts = line.split("#")[0].split()
+            if len(parts) == 2 and parts[0].lower() == os.path.basename(path).lower():
+                return parts[1]
+    except OSError:
+        pass
+    return None
+
+
+VB_RUNTIMES = (b"vbrun100", b"vbrun200", b"vbrun300", b"vb40016", b"vb40032", b"msvbvm50", b"msvbvm60")
+VB_LIMIT = 32767 // 15          # Visual Basic stores screen sizes in twips (15 per pixel) in 16-bit integers
+
+
+def is_visual_basic(path):
+    try:
+        with open(path, "rb") as f:
+            data = f.read(4 * 1024 * 1024).lower()
+        return any(r in data for r in VB_RUNTIMES)
+    except OSError:
+        return False
+
+
+def screen_size():
+    """Total desktop size in pixels (all monitors together), or None."""
+    if shutil.which("xrandr") and os.environ.get("DISPLAY"):
+        r = subprocess.run(["xrandr", "--current"], capture_output=True, text=True)
+        for line in r.stdout.splitlines():
+            if " current " in line:
+                part = line.split(" current ")[1].split(",")[0].split(" x ")
+                try:
+                    return int(part[0]), int(part[1])
+                except (ValueError, IndexError):
+                    pass
+    return None
+
+
+def auto_desktop(path):
+    """Old Visual Basic programs crash with 'Run-time error 6: Overflow' on screens (or multi-monitor desktops)
+    wider or taller than 2184 pixels. Give them a virtual desktop window of 1920x1080 (or smaller) instead."""
+    size = screen_size()
+    if not size or (size[0] <= VB_LIMIT and size[1] <= VB_LIMIT) or not is_visual_basic(path):
+        return None
+    w, h = min(1920, size[0], VB_LIMIT), min(1080, size[1], VB_LIMIT)
+    log(f"Visual Basic program on a {size[0]}x{size[1]} desktop -> virtual desktop {w}x{h}")
+    return f"{w}x{h}"
+
+
+def run_wine(path, args, console, msi=False, prefix=None, e=None):
+    if not page_size_ok():
+        return 1
+    if not shutil.which(WINE[0]):
+        tell(T("Wine is not installed. Run install.sh from exe-handler first.",
+               "Wine is niet geïnstalleerd. Draai eerst install.sh van exe-handler."), error=True)
+        return 1
+    e = e or env_wine()
+    if not prefix_ready(e):
+        tell(T("Could not prepare Wine. See ~/.cache/exe-handler.log",
+               "Wine kon niet worden klaargezet. Zie ~/.cache/exe-handler.log"), error=True)
+        return 1
+    path = alias(path)
+    auto_settings(path, e)
+    reg = next_to(path, "exe-handler.reg", "run-exe.reg")
+    if reg:
+        wine("regedit", "/S", "Z:" + reg.replace("/", "\\"), e=e)
+        log(f"registry imported: {reg}")
+    size = None if (prefix or msi) else (virtual_desktop(path) or auto_desktop(path))
+    if size:
+        prefix = ["explorer", f"/desktop={os.path.splitext(os.path.basename(path))[0]},{size}"]
+        log(f"virtual desktop {size}")
+    cmd = WINE + (prefix or []) + (["msiexec", "/i"] if msi else []) + [path] + args
+    cwd = os.path.dirname(path)
+    log("run " + shlex.join(cmd))
+    if console and sys.stdin.isatty():
+        return subprocess.run(cmd, cwd=cwd, env=e).returncode
+    if console:
+        cmd = terminal(cmd)
+    start = time.time()
+    with open(LOG, "a") as lf:
+        rc = subprocess.run(cmd, cwd=cwd, env=e, stdout=lf, stderr=lf).returncode
+    log(f"wine finished rc={rc} after {time.time() - start:.0f}s")
+    if rc not in (0, None) and time.time() - start < 5:
+        tell(T(f"{os.path.basename(path)} stopped right away (code {rc}). See ~/.cache/exe-handler.log",
+               f"{os.path.basename(path)} stopte meteen (code {rc}). Zie ~/.cache/exe-handler.log"), error=True)
+    return rc
+
+
+def run_win16(path, args):
+    """16-bit Windows. x86 Wine runs it itself; on ARM Box64 cannot, so otvdm emulates the 16-bit CPU."""
+    if IS_X86 or not OTVDM or not os.path.exists(os.path.join(OTVDM, "otvdmw.exe")):
+        return run_wine(path, args, False)
+    e = env_wine()
+    dlls = os.path.join(OTVDM, "dll")
+    if os.path.isdir(dlls):
+        e["WINEDLLOVERRIDES"] = ",".join(sorted(n for n in os.listdir(dlls) if n.lower().endswith("16"))) + "=n"
+    return run_wine(path, args, False, prefix=["Z:" + os.path.join(OTVDM, "otvdmw.exe").replace("/", "\\")], e=e)
+
+
+DOS_CONF = """# DOSBox-X settings for exe-handler (DOS programs and games). Edit freely.
+# Alt+Enter = fullscreen on/off. The window can be resized and maximised; the picture scales along.
+[sdl]
+autolock         = false
+showmenu         = false
+fullresolution   = desktop
+windowresolution = original
+output           = opengl
+[dosbox]
+machine = svga_s3
+memsize = 32
+[cpu]
+core    = auto
+cputype = auto
+cycles  = auto
+[sblaster]
+sbtype = sb16
+[render]
+aspect = true
+scaler = normal2x
+"""
+
+
+def run_dos(path, args):
+    if not shutil.which(DOSBOX[0]):
+        tell(T("DOSBox is not installed. Run install.sh from exe-handler first.",
+               "DOSBox is niet geïnstalleerd. Draai eerst install.sh van exe-handler."), error=True)
+        return 1
+    conf = os.path.join(USER_DIR, "dos.conf")
+    if not os.path.exists(conf):
+        os.makedirs(USER_DIR, exist_ok=True)
+        with open(conf, "w") as f:
+            f.write(DOS_CONF)
+    d, name = os.path.split(path)
+    run = " ".join([f'"{name}"' if " " in name else name] + args)
+    x = any("dosbox-x" in w.lower() for w in DOSBOX)
+    cmd = DOSBOX + (["-conf", conf, "-fastlaunch", "-nopromptfolder"] if x else []) + \
+        ["-c", f'mount c "{d}"', "-c", "c:", "-c", run, "-c", "exit"]
+    log("run " + shlex.join(cmd))
+    with open(LOG, "a") as lf:
+        return subprocess.run(cmd, cwd=d, stdout=lf, stderr=lf).returncode
+
+
+def main():
+    a = sys.argv[1:]
+    force = a.pop(0)[2:] if a and a[0] in ("--dos", "--wine") else None
+    if not a or a[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0 if a else 2
+    path = os.path.abspath(a[0])
+    args = a[1:]
+    if not os.path.isfile(path):
+        tell(T(f"File not found: {path}", f"Bestand niet gevonden: {path}"), error=True)
+        return 1
+    k, console = kind(path)
+    log(f"start {path} type={k} console={console} choice={force or 'auto'}")
+    if force == "dos" or (not force and k in ("dos", "bat")):
+        return run_dos(path, args)
+    if not force and k == "win16":
+        return run_win16(path, args)
+    return run_wine(path, args, console, msi=(k == "msi"))
+
+
+if __name__ == "__main__":
+    sys.exit(main())
