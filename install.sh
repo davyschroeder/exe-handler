@@ -5,15 +5,17 @@
 # Options:  --yes        no questions (accept defaults)
 #           --dry-run    only show what would happen
 #           --no-binfmt  do not register .exe files with the kernel (see README)
+#           --update     only replace the exe-handler program with the newest version from GitHub
 set -euo pipefail
 
-YES=0; DRY=0; BINFMT=1
+YES=0; DRY=0; BINFMT=1; UPDATE=0
 for a in "$@"; do
   case "$a" in
     --yes|-y) YES=1 ;;
     --dry-run|-n) DRY=1 ;;
     --no-binfmt) BINFMT=0 ;;
-    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+    --update|-u) UPDATE=1 ;;
+    -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
     *) echo "Unknown option: $a" >&2; exit 2 ;;
   esac
 done
@@ -39,6 +41,26 @@ run()  { if [ $DRY = 1 ]; then echo "   [dry-run] $*"; else "$@"; fi; }
 SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo
 sudo_run() { if [ -n "$SUDO" ]; then run sudo "$@"; else run "$@"; fi; }
 ask() { [ $YES = 1 ] && return 0; read -r -p "$1 [Y/n] " r; [[ ! "$r" =~ ^[nN] ]]; }
+
+# ---------- --update: just the program itself, from GitHub ----------
+if [ $UPDATE = 1 ]; then
+  URL=https://raw.githubusercontent.com/davyschroeder/exe-handler/main/exe-handler
+  [ -e "$BIN" ] || die "exe-handler is not installed yet; run ./install.sh without --update first."
+  TMP=$(mktemp)
+  say "Downloading the newest exe-handler from GitHub"
+  if command -v curl >/dev/null; then curl -fsSL -o "$TMP" "$URL" || die "Download failed: $URL"
+  else wget -q -O "$TMP" "$URL" || die "Download failed: $URL"; fi
+  head -1 "$TMP" | grep -q python3 || die "The download is not the exe-handler program; nothing changed."
+  if cmp -s "$TMP" "$BIN"; then
+    say "Already the newest version."
+  else
+    sudo_run install -m 755 "$TMP" "$BIN"
+    say "exe-handler updated."
+  fi
+  rm -f "$TMP"
+  say "Done."
+  exit 0
+fi
 
 # ---------- what machine is this ----------
 ARCH=$(uname -m)

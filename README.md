@@ -74,6 +74,11 @@ Pi-Apps-Coders; op andere distributies wordt Box64 uit de broncode gebouwd.
 
 Logboek: `~/.cache/exe-handler.log`. Handmatig: `exe-handler [--dos|--wine] bestand.exe [argumenten]`.
 
+### Bijwerken
+
+`./install.sh --update` haalt de nieuwste versie van het programma exe-handler van GitHub en zet die op zijn
+plek. Wine, DOSBox-X en de instellingen blijven zoals ze zijn.
+
 ### Verwijderen
 
 `./uninstall.sh` haalt exe-handler, de bestandskoppelingen en de kernelregel weg. Wine, DOSBox-X, Box64 en
@@ -91,7 +96,7 @@ Logboek: `~/.cache/exe-handler.log`. Handmatig: `exe-handler [--dos|--wine] best
 DOSBox-X for DOS, Wine for Windows (on ARM64: Wine 11.4 x86-64 via Box64, otvdm for 16-bit), file associations,
 a binfmt_misc rule for executable `.exe` files, normal window decorations (minimise/maximise) and Alt+Tab in
 fullscreen, and an automatic virtual desktop for old Visual Basic programs on wide screens. Run `./install.sh`
-(`--dry-run` to preview). Uninstall with `./uninstall.sh`.
+(`--dry-run` to preview). Update the program with `./install.sh --update`, uninstall with `./uninstall.sh`.
 
 Third-party software that the installer downloads: [Wine](https://www.winehq.org) builds by
 [Kron4ek](https://github.com/Kron4ek/Wine-Builds), [Box64](https://github.com/ptitSeb/box64) via
