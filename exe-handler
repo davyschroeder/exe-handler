@@ -384,14 +384,86 @@ def auto_desktop(path):
     return f"{w}x{h}"
 
 
-def unfullscreen_desktop(name, size):
-    """Wine 10 shows a virtual desktop as a borderless fullscreen window on one monitor, with the program in the
-    top-left corner. Turn it back into a normal window with a title bar of the asked size (needs wmctrl, X11)."""
+def desktop_windows(desk):
+    """Visible program windows inside a Wine virtual desktop window: [(id, x, y, w, h)]."""
+    import re
+    try:
+        out = subprocess.run(["xwininfo", "-id", desk, "-children"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if "Parent window id" not in out:
+        return None                                   # the desktop window is gone
+    wins = []
+    for m in re.finditer(r'^\s+(0x[0-9a-f]+) "([^"]+)": \(.*?\)\s+(\d+)x(\d+)\+(-?\d+)\+(-?\d+)', out, re.M):
+        wid, title, w, h, x, y = m.group(1), m.group(2), *map(int, m.groups()[2:])
+        if w < 50 or h < 50 or title == "Default IME":
+            continue
+        info = subprocess.run(["xwininfo", "-id", wid], capture_output=True, text=True).stdout
+        if "IsViewable" in info:
+            wins.append((wid, x, y, w, h))
+    return wins
+
+
+WINE_BORDER, WINE_CAPTION = 3, 25      # pixels of Wine's own window border and title bar (default theme, 96 dpi)
+
+
+def wine_frame(wid, w, maximised):
+    """(border, title bar height incl. top border) in pixels of a Wine-drawn window, measured from its picture:
+    the title bar is the blue band at the top. Needs ImageMagick's import; else the default theme's sizes."""
+    guess = (0, WINE_CAPTION + 2) if maximised else (WINE_BORDER, WINE_CAPTION)
+    if not shutil.which("import"):
+        return guess[0], guess[1]
+
+    def pixels(crop):
+        try:
+            out = subprocess.run(["import", "-window", wid, "-crop", crop, "+repage", "txt:-"],
+                                 capture_output=True, text=True, timeout=10).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        px = []
+        for line in out.splitlines():
+            hx = next((t for t in line.split() if t.startswith("#")), None)
+            if hx and len(hx) in (7, 9, 13, 17):
+                n = (len(hx) - 1) // (3 if len(hx) in (7, 13) else 4)
+                px.append(tuple(int(hx[1 + i * n:3 + i * n], 16) for i in range(3)))
+        return px
+
+    def blue(p):
+        return p[2] > 140 and p[2] - p[0] > 60
+
+    col = pixels(f"1x70+{max(w - 80, w // 2)}+0")          # a column right of the title text, left of the buttons
+    rows = [i for i, p in enumerate(col) if blue(p)]
+    if not rows or rows[0] > 12:
+        return guess[0], guess[1]
+    top, end = rows[0], rows[0]
+    for i in rows:
+        if i > end + 2:
+            break
+        end = i
+    row = pixels(f"30x1+0+{(top + end) // 2}")
+    left = next((i for i, p in enumerate(row) if blue(p)), 0 if maximised else WINE_BORDER)
+    cap = end + 1
+    # a normal window has one more line between title bar and contents; keep the border below/right as on the left
+    log(f"Wine window frame measured: border {left}, title bar rows {top}-{end}")
+    return left, cap - left + (1 if not maximised and left else 0)
+
+
+def fit_desktop(name, size):
+    """A Wine virtual desktop (used for Visual Basic programs, see auto_desktop) as a tidy normal window.
+    Wine 10 shows it borderless and fullscreen on one monitor with the program in a corner. This gives it a title
+    bar again and makes it exactly as large as the program's window, so it looks like one window that can be
+    dragged, minimised and closed. When the program opens another or a larger window, the desktop goes back to its
+    full size first and is fitted again. Needs wmctrl, xwininfo and xdotool on X11; without them nothing happens."""
     if not (os.environ.get("DISPLAY") and shutil.which("wmctrl")):
         return
     import threading
+    can_fit = bool(shutil.which("xwininfo") and shutil.which("xdotool"))
+
+    def wm(*a):
+        subprocess.run(["wmctrl", "-i", "-r", desk] + list(a), stderr=subprocess.DEVNULL)
 
     def work():
+        nonlocal desk
         title = f"{name} - Wine Desktop"
         for _ in range(60):
             time.sleep(0.5)
@@ -401,14 +473,55 @@ def unfullscreen_desktop(name, size):
                 return
             ids = [r.split()[0] for r in rows if r.rstrip().endswith(title)]
             if ids:
-                w, h = size.split("x")
-                time.sleep(1.5)
-                subprocess.run(["wmctrl", "-i", "-r", ids[0], "-b", "remove,fullscreen"], stderr=subprocess.DEVNULL)
-                time.sleep(1)
-                subprocess.run(["wmctrl", "-i", "-r", ids[0], "-e", f"0,-1,-1,{w},{h}"], stderr=subprocess.DEVNULL)
-                log(f"virtual desktop window {ids[0]} set to a normal {size} window")
+                desk = ids[0]
+                break
+        else:
+            return
+        full = tuple(int(x) for x in size.split("x"))
+        time.sleep(1.5)
+        wm("-b", "remove,fullscreen")
+        time.sleep(1)
+        wm("-e", f"0,-1,-1,{full[0]},{full[1]}")
+        log(f"virtual desktop window {desk} is a normal {size} window now")
+        if not can_fit:
+            return
+        cur, last, stable, fits = full, None, 0, 0
+        while fits < 8:
+            time.sleep(1)
+            wins = desktop_windows(desk)
+            if wins is None:
                 return
+            if not wins:
+                continue
+            sig = sorted(wins)
+            if sig != last:
+                last, stable = sig, 0
+                if cur != full:                       # something changed after fitting: give the program room again
+                    wm("-e", f"0,-1,-1,{full[0]},{full[1]}")
+                    cur = full
+                continue
+            stable += 1
+            if stable != 2 or cur != full:
+                continue
+            if len(wins) == 1:
+                # one window: slide Wine's own title bar and border (measured) out of sight, the desktop's title bar
+                # (drag, minimise, close) is enough. A maximised window has no border, only the title bar.
+                wid, x, y, w, h = wins[0]
+                b, cap = wine_frame(wid, w, (w, h) == full)
+                subprocess.run(["xdotool", "windowmove", wid, str(-b), str(-b - cap)], stderr=subprocess.DEVNULL)
+                time.sleep(0.5)
+                target = (w - 2 * b, h - 2 * b - cap)
+            else:
+                target = (max(x + w for _, x, y, w, h in wins), max(y + h for _, x, y, w, h in wins))
+            target = (min(target[0], full[0]), min(target[1], full[1]))
+            if target != cur:
+                wm("-e", f"0,-1,-1,{target[0]},{target[1]}")
+                cur, fits = target, fits + 1
+                time.sleep(1)
+                last = sorted(desktop_windows(desk) or [])
+                log(f"virtual desktop fitted to the program window: {target[0]}x{target[1]}")
 
+    desk = None
     threading.Thread(target=work, daemon=True).start()
 
 
@@ -440,7 +553,7 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
         name = os.path.splitext(os.path.basename(path))[0]
         prefix = ["explorer", f"/desktop={name},{size}"]
         log(f"virtual desktop {size}")
-        unfullscreen_desktop(name, size)
+        fit_desktop(name, size)
     cmd = WINE + (prefix or []) + (["msiexec", "/i"] if msi else []) + [path] + args
     cwd = os.path.dirname(path)
     log("run " + shlex.join(cmd))

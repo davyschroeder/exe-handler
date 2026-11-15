@@ -74,7 +74,8 @@ Pi-Apps-Coders; op andere distributies wordt Box64 uit de broncode gebouwd.
   zet zelf een getal bij `cycles` in `dos.conf` om dat vast te zetten.
 - **Afsluiten van DOSBox-X** vraagt niet meer om bevestiging.
 - **Het eigen venster voor Visual Basic-programma's**: Wine 10 toont zo'n virtueel bureaublad schermvullend en zonder
-  rand op één monitor; exe-handler maakt er weer een gewoon venster met titelbalk van (via `wmctrl`, op X11).
+  rand op één monitor; exe-handler maakt er weer een gewoon venster met titelbalk van dat precies om het programma past, en schuift
+  Wine's eigen titelbalk uit beeld zodat je één venster ziet (via `wmctrl`, `xdotool` en `xwininfo`, op X11).
 - **Visual Basic-runtime één map hoger** (zoals op shareware-cd's, `VBRUN300.DLL` naast de spelmappen) wordt gevonden.
 
 ### Per programma aanpassen (optioneel)
