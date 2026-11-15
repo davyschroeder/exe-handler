@@ -92,8 +92,8 @@ pkg_try() { for p in "$@"; do pkg_install "$p" >/dev/null 2>&1 && echo "   + $p"
 # ---------- basic tools ----------
 say "Basic tools (dialogs, download, unpack)"
 case $PM in
-  apt-get) pkg_try zenity curl ca-certificates xz-utils unzip python3 desktop-file-utils xdg-utils gpg x11-xserver-utils x11-utils wmctrl xdotool imagemagick ;;
-  *)       pkg_try zenity curl xz unzip python3 desktop-file-utils xdg-utils xrandr xorg-xrandr wmctrl xdotool xorg-xwininfo imagemagick ImageMagick ;;
+  apt-get) pkg_try zenity curl ca-certificates xz-utils unzip python3 desktop-file-utils xdg-utils gpg x11-xserver-utils x11-utils wmctrl xdotool imagemagick timgm6mb-soundfont ;;
+  *)       pkg_try zenity curl xz unzip python3 desktop-file-utils xdg-utils xrandr xorg-xrandr wmctrl xdotool xorg-xwininfo imagemagick ImageMagick soundfont-fluid fluid-soundfont-gm ;;
 esac
 
 # ---------- DOSBox-X for DOS programs ----------

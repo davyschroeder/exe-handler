@@ -587,11 +587,12 @@ def run_win16(path, args):
 
 
 DOS_CONF = """# DOSBox-X settings for exe-handler (DOS programs and games). Edit freely.
+# The mouse is caught when you click in the window (needed for games like Doom); Ctrl+F10 lets it go.
 # F12+F = fullscreen on/off (F12 is the DOSBox-X host key). The window can be resized and maximised;
 # the picture scales along. With "cycles = auto" exe-handler picks a speed from the age of the program
 # (see dos_cycles in exe-handler); set a number here (e.g. cycles = 8000) to fix the speed yourself.
 [sdl]
-autolock         = false
+autolock         = true
 showmenu         = false
 fullresolution   = desktop
 windowresolution = original
@@ -636,6 +637,36 @@ def conf_has(conf, key):
         return False
 
 
+SOUNDFONTS = ("/usr/share/sounds/sf2/FluidR3_GM.sf2", "/usr/share/sounds/sf2/default-GM.sf2",
+              "/usr/share/soundfonts/default.sf2", "/usr/share/soundfonts/FluidR3_GM.sf2",
+              "/usr/share/sounds/sf2/TimGM6mb.sf2", "/usr/share/soundfonts/TimGM6mb.sf2")
+
+
+def dos_midi(conf):
+    """Games set up for General MIDI music stay silent when DOSBox-X has no sound font; it does not look in the
+    places where Linux distributions install one. Point it to the first one found (unless dos.conf has its own)."""
+    if conf_has(conf, "mididevice") or conf_has(conf, "fluid.soundfont"):
+        return []
+    sf = next((f for f in SOUNDFONTS if os.path.exists(f)), None)
+    if not sf:
+        return []
+    return ["-set", "midi mididevice=fluidsynth", "-set", f"midi fluid.soundfont={sf}"]
+
+
+def dos_conf_update(conf):
+    """dos.conf written by an earlier exe-handler had autolock = false: games that steer with the mouse (Doom)
+    did not get it. Change that line once; a file the user changed further keeps everything else."""
+    try:
+        text = open(conf).read()
+    except OSError:
+        return
+    old = "autolock         = false\n"
+    if text.startswith("# DOSBox-X settings for exe-handler") and old in text and "# autolock: keep" not in text:
+        with open(conf, "w") as f:
+            f.write(text.replace(old, "autolock         = true\n# autolock: keep  (Ctrl+F10 releases the mouse; write false above to never catch it)\n"))
+        log("dos.conf: autolock set to true (mouse is caught on click, Ctrl+F10 releases)")
+
+
 def dos_cycles(path, conf):
     """Speed for real-mode DOS programs. DOSBox's own 'auto' gives them 3000 cycles (a slow 286), which is right
     for games from the 1980s but far too slow for 1990s games. Guess from the date of the program file;
@@ -675,10 +706,12 @@ def run_dos(path, args):
     d = dos_safe_dir(d)
     run = " ".join([f'"{name}"' if " " in name else name] + args)
     x = any("dosbox-x" in w.lower() for w in DOSBOX)
+    dos_conf_update(conf)
     cyc = dos_cycles(path, conf)
     cmd = DOSBOX + (["-conf", conf, "-fastlaunch", "-nopromptfolder"] if x else []) + \
         (["-set", f"cpu cycles={cyc}"] if x and cyc else []) + \
         (["-set", "dosbox quit warning=false"] if x and not conf_has(conf, "quit warning") else []) + \
+        (dos_midi(conf) if x else []) + \
         ["-c", f'mount c "{d}"', "-c", "c:", "-c", run, "-c", "exit"]
     log("run " + shlex.join(cmd))
     with open(LOG, "a") as lf:

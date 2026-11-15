@@ -59,7 +59,7 @@ Pi-Apps-Coders; op andere distributies wordt Box64 uit de broncode gebouwd.
   of hoger dan 2184 pixels (ook twee monitoren naast elkaar). exe-handler herkent ze en start ze altijd in een
   eigen venster van 1600x900 (kleiner als je scherm kleiner is).
 - **DOS-programma's**: venster dat je kunt vergroten/maximaliseren (het beeld schaalt mee), **F12+F** = volledig
-  scherm aan/uit, de muis wordt niet gevangen. Het DOSBox-X-menu is verborgen; instellingen staan in
+  scherm aan/uit, klik in het venster om de muis te vangen (Ctrl+F10 laat los). Het DOSBox-X-menu is verborgen; instellingen staan in
   `~/.config/exe-handler/dos.conf`.
 - Programma's gebouwd voor Windows 95 t/m XP krijgen automatisch Windows-versie "XP" (minder installatiefouten).
 
@@ -73,6 +73,10 @@ Pi-Apps-Coders; op andere distributies wordt Box64 uit de broncode gebouwd.
   exe-handler kiest de snelheid naar het jaartal van het programma (jaren 80: 3000 cycles, 1994 en later: 20000);
   zet zelf een getal bij `cycles` in `dos.conf` om dat vast te zetten.
 - **Afsluiten van DOSBox-X** vraagt niet meer om bevestiging.
+- **Muis in DOS-spellen** (Doom): klik in het venster en de muis wordt gevangen, zodat bewegen werkt; **Ctrl+F10**
+  laat hem weer los.
+- **MIDI-muziek**: DOSBox-X krijgt de klankbank (SoundFont) van het systeem aangewezen; zonder blijven spellen met
+  General MIDI-muziek stil.
 - **Het eigen venster voor Visual Basic-programma's**: Wine 10 toont zo'n virtueel bureaublad schermvullend en zonder
   rand op één monitor; exe-handler maakt er weer een gewoon venster met titelbalk van dat precies om het programma past, en schuift
   Wine's eigen titelbalk uit beeld zodat je één venster ziet (via `wmctrl`, `xdotool` en `xwininfo`, op X11).
