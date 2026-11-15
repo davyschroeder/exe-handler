@@ -33,6 +33,9 @@ BOX64_REPO=https://pi-apps-coders.github.io/box64-debs
 WINE_ARM_VERSION=11.4
 WINE_ARM_SHA256=5c5f7019754403ac50b05bad7ab568b680a504cd886e0590b05882d2bf054b25
 OTVDM_SHA256=842b11aed5fa81f3e1d4272e0ee7d37f1a5a8f936de825309dda672835e16fd4
+CNC_VERSION=v7.1.0.0
+CNC_URL=https://github.com/FunkyFr3sh/cnc-ddraw/releases/download/$CNC_VERSION/cnc-ddraw.zip
+CNC_SHA256=0b13ab89a64c9918189b1dadd449ef6ed3cb3b7b19cabd96d8adbd95505bb908
 
 say()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
@@ -213,8 +216,23 @@ install_wine_arm64() {
   OTVDM_DIR="$OPT/otvdm"
 }
 
+install_cnc_ddraw() {
+  # old DirectDraw games: scaled window instead of a 320x200/640x480 mode switch (see cnc_ddraw in exe-handler)
+  [ -f "$OPT/cnc-ddraw/ddraw.dll" ] && { echo "   cnc-ddraw already in $OPT/cnc-ddraw"; return; }
+  say "cnc-ddraw $CNC_VERSION (old DirectDraw games) from $CNC_URL"
+  local t; t=$(mktemp -d)
+  run curl -fsSL -o "$t/cnc.zip" "$CNC_URL" || { warn "cnc-ddraw download failed, skipped"; return; }
+  if [ $DRY = 0 ]; then
+    echo "$CNC_SHA256  $t/cnc.zip" | sha256sum -c --quiet - || { warn "cnc-ddraw download does not match the expected sha256, skipped"; return; }
+  fi
+  run unzip -q "$t/cnc.zip" ddraw.dll -d "$t/x"
+  sudo_run mkdir -p "$OPT/cnc-ddraw"
+  sudo_run install -m 644 "$t/x/ddraw.dll" "$OPT/cnc-ddraw/ddraw.dll"
+  rm -rf "$t"
+}
+
 case $ARCH in
-  x86_64|i686) install_wine_x86 ;;
+  x86_64|i686) install_wine_x86; install_cnc_ddraw ;;
   aarch64)
     install_wine_arm64
     if [ "$PAGESIZE" != 4096 ]; then

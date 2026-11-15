@@ -67,6 +67,11 @@ Pi-Apps-Coders; op andere distributies wordt Box64 uit de broncode gebouwd.
   wissel na (`EmulateModeset`), je echte monitor en de indeling van meerdere schermen blijven zoals ze zijn. Als
   vangnet zet exe-handler na afloop de monitoren terug als een programma ze toch heeft veranderd (bijvoorbeeld na
   een crash).
+- **Oude DirectDraw-spellen** (Windows 95-XP, bijvoorbeeld Jazz Jackrabbit 2) vragen het scherm om 320x200 of
+  640x480 in 256 kleuren; moderne schermen weigeren dat ("Could not set video mode"). Op x86 zet exe-handler
+  eenmalig [cnc-ddraw](https://github.com/FunkyFr3sh/cnc-ddraw) (`ddraw.dll` + `ddraw.ini`) naast het spel: het
+  spel draait dan in een gewoon venster dat je kunt vergroten en maximaliseren, het beeld schaalt mee. Uitzetten
+  per spel: maak een leeg bestand `exe-handler.no-ddraw` naast de .exe en verwijder `ddraw.dll`/`ddraw.ini`.
 - **Programma's op een netwerkshare** die je in Bestanden opent (`smb://...`): DOSBox-X kan niet tegen de dubbele
   punt in zo'n pad; exe-handler koppelt de map via een snelkoppeling in `~/.cache/exe-handler/dos/`.
 - **Snelheid van DOS-spellen**: DOSBox geeft oude (real-mode) spellen standaard de snelheid van een trage 286.

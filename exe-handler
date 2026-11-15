@@ -525,6 +525,74 @@ def fit_desktop(name, size):
     threading.Thread(target=work, daemon=True).start()
 
 
+CNC_DDRAW = os.environ.get("EXE_HANDLER_CNC", "/opt/exe-handler/cnc-ddraw")       # ddraw.dll from https://github.com/FunkyFr3sh/cnc-ddraw (install.sh)
+CNC_MARK = "; written by exe-handler"
+CNC_INI = CNC_MARK + """ (delete this file and ddraw.dll, or create exe-handler.no-ddraw, to switch this off)
+; cnc-ddraw draws old DirectDraw games in a normal window and scales the picture. The game's own low resolution
+; (320x200, 640x480, 256 colours) is not asked from the monitor, which modern screens refuse.
+; Maximise the window for a big picture. All settings: https://github.com/FunkyFr3sh/cnc-ddraw
+[ddraw]
+width=%d
+height=%d
+fullscreen=false
+windowed=true
+maintas=true
+border=true
+resizable=true
+savesettings=0
+renderer=auto
+nonexclusive=true
+singlecpu=true
+adjmouse=true
+keytogglefullscreen=0x00
+"""
+
+
+def old_directdraw(path):
+    """A 2D-era DirectDraw game: built for Windows 95-XP and uses ddraw.dll but not Direct3D 8/9."""
+    ver = pe_os_version(path)
+    if not ver or ver[0] >= 6:
+        return False
+    try:
+        with open(path, "rb") as f:
+            data = f.read(8 * 1024 * 1024).lower()
+    except OSError:
+        return False
+    return b"ddraw.dll" in data and not any(d in data for d in (b"d3d8.dll", b"d3d9.dll", b"opengl32.dll"))
+
+
+def cnc_ddraw(path, e):
+    """Old DirectDraw games ask the monitor for 320x200 or 640x480 in 256 colours. Today's screens refuse ('Could
+    not set video mode'), or the whole desktop is rearranged. Put cnc-ddraw next to the game (once) and let Wine
+    use it for this run: the game then lives in a scaled, resizable window. x86 only (not tested under Box64)."""
+    d = os.path.dirname(path)
+    dll, ini = os.path.join(d, "ddraw.dll"), os.path.join(d, "ddraw.ini")
+    src = os.path.join(CNC_DDRAW, "ddraw.dll")
+    if not IS_X86 or not os.path.exists(src) or next_to(path, "exe-handler.no-ddraw") or not old_directdraw(path):
+        return e
+    ours = False
+    try:
+        ours = open(ini, errors="replace").readline().startswith(CNC_MARK)
+    except OSError:
+        pass
+    if os.path.exists(dll) and not ours:
+        return e                                  # the game brings its own ddraw.dll (or the user placed one)
+    if not ours:
+        try:
+            shutil.copyfile(src, dll)
+            size = screen_size() or (1920, 1080)
+            w, h = (1280, 960) if size[1] >= 1200 else (800, 600)
+            with open(ini, "w") as f:
+                f.write(CNC_INI % (w, h))
+        except OSError as err:
+            log(f"cnc-ddraw not placed next to the game ({err})")
+            return e
+        log(f"cnc-ddraw placed in {d} (old DirectDraw game: scaled window instead of a mode switch)")
+    e = dict(e)
+    e["WINEDLLOVERRIDES"] = "ddraw=n,b" + (";" + e["WINEDLLOVERRIDES"] if e.get("WINEDLLOVERRIDES") else "")
+    return e
+
+
 def run_wine(path, args, console, msi=False, prefix=None, e=None):
     if not page_size_ok():
         return 1
@@ -549,6 +617,8 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
         e["WINEPATH"] = extra + (";" + e["WINEPATH"] if e.get("WINEPATH") else "")
         log(f"runtime DLLs found one folder up: WINEPATH={extra}")
     size = None if (prefix or msi) else (virtual_desktop(path) or auto_desktop(path))
+    if not (size or prefix or msi):
+        e = cnc_ddraw(path, e)
     if size:
         name = os.path.splitext(os.path.basename(path))[0]
         prefix = ["explorer", f"/desktop={name},{size}"]
