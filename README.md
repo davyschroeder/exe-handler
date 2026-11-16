@@ -93,8 +93,8 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
 
 ## DOS-programma's
 
-- **Venster**: vergroten en maximaliseren kan, het beeld schaalt mee. **F12+F** = volledig scherm aan/uit (F12 is
-  de hosttoets van DOSBox-X). Het DOSBox-X-menu is verborgen. Het venster sluiten vraagt niet om bevestiging.
+- **Venster**: vergroten en maximaliseren kan, het beeld schaalt mee. **Alt+Enter** = volledig scherm aan/uit. DOSBox-X
+  heeft dat zelf op F12+F; exe-handler vangt Alt+Enter af en geeft het zo door (op X11). Het DOSBox-X-menu is verborgen. Het venster sluiten vraagt niet om bevestiging.
 - **Muis**: klik in het venster en de muis wordt gevangen, zodat bewegen werkt in spellen als Doom; **Ctrl+F10**
   laat hem weer los.
 - **Snelheid**: DOSBox geeft oude (real-mode) spellen standaard de snelheid van een trage 286. exe-handler kiest de

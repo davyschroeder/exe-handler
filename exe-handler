@@ -702,7 +702,7 @@ def run_win16(path, args):
 
 DOS_CONF = """# DOSBox-X settings for exe-handler (DOS programs and games). Edit freely.
 # The mouse is caught when you click in the window (needed for games like Doom); Ctrl+F10 lets it go.
-# F12+F = fullscreen on/off (F12 is the DOSBox-X host key). The window can be resized and maximised;
+# Alt+Enter or F12+F = fullscreen on/off (F12 is the DOSBox-X host key; exe-handler passes Alt+Enter on as F12+F). The window can be resized and maximised;
 # the picture scales along. With "cycles = auto" exe-handler picks a speed from the age of the program
 # (see dos_cycles in exe-handler); set a number here (e.g. cycles = 8000) to fix the speed yourself.
 [sdl]
@@ -806,6 +806,68 @@ def dos_cycles(path, conf):
     return f"auto {n} 90%"
 
 
+def alt_enter_fullscreen(pid):
+    """Alt+Enter = fullscreen on/off, as people expect from DOS games. DOSBox-X has it on F12+F, and a key file
+    that only adds Alt+Enter switches all other keys off. So: catch Alt+Enter while the DOSBox-X window has the
+    keyboard and press F12+F for it. X11 (also XWayland), needs wmctrl and libXtst; silently nothing otherwise."""
+    if not (os.environ.get("DISPLAY") and shutil.which("wmctrl")):
+        return
+    import ctypes, threading
+
+    def work():
+        try:
+            X = ctypes.cdll.LoadLibrary("libX11.so.6")
+            T = ctypes.cdll.LoadLibrary("libXtst.so.6")
+        except OSError:
+            return
+        X.XOpenDisplay.restype = ctypes.c_void_p
+        X.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        X.XGrabKey.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_uint, ctypes.c_ulong] + [ctypes.c_int] * 3
+        X.XNextEvent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        X.XUngrabKeyboard.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        X.XFlush.argtypes = [ctypes.c_void_p]
+        X.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        X.XSetErrorHandler.argtypes = [ctypes.c_void_p]
+        T.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+        handler = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)(lambda d, e: 0)
+        X.XSetErrorHandler(handler)                   # a window that is gone must not end exe-handler
+        d = ctypes.c_void_p(X.XOpenDisplay(None))
+        if not d:
+            return
+        win = None
+        for _ in range(60):
+            try:
+                rows = subprocess.run(["wmctrl", "-lp"], capture_output=True, text=True, timeout=5).stdout.splitlines()
+            except (OSError, subprocess.TimeoutExpired):
+                return
+            ids = [r.split()[0] for r in rows if len(r.split()) > 2 and r.split()[2] == str(pid)]
+            if ids:
+                win = int(ids[-1], 16)
+                break
+            time.sleep(0.5)
+        if not win:
+            return
+        ret, f12, kf = (X.XKeysymToKeycode(d, k) for k in (0xff0d, 0xffc9, 0x66))      # Return, F12, f
+        for lock in (0, 2, 16, 18):                   # with and without Caps Lock (2) and Num Lock (16)
+            X.XGrabKey(d, ret, 8 | lock, win, 0, 1, 1)                                 # 8 = Alt
+        X.XSync(d, 0)
+        log("Alt+Enter switches DOSBox-X fullscreen (sent as F12+F)")
+        ev = ctypes.create_string_buffer(192)
+        while True:
+            X.XNextEvent(d, ev)
+            if ctypes.cast(ev, ctypes.POINTER(ctypes.c_int))[0] != 2:                  # KeyPress
+                continue
+            X.XUngrabKeyboard(d, 0)
+            X.XSync(d, 0)
+            time.sleep(0.05)
+            for key, down, wait in ((f12, 1, 0.15), (kf, 1, 0.08), (kf, 0, 0.15), (f12, 0, 0)):
+                T.XTestFakeKeyEvent(d, key, down, 0)
+                X.XFlush(d)
+                time.sleep(wait)
+
+    threading.Thread(target=work, daemon=True).start()
+
+
 def run_dos(path, args):
     if not shutil.which(DOSBOX[0]):
         tell(T("DOSBox is not installed. Run install.sh from exe-handler first.",
@@ -829,7 +891,10 @@ def run_dos(path, args):
         ["-c", f'mount c "{d}"', "-c", "c:", "-c", run, "-c", "exit"]
     log("run " + shlex.join(cmd))
     with open(LOG, "a") as lf:
-        return subprocess.run(cmd, cwd=d, stdout=lf, stderr=lf).returncode
+        proc = subprocess.Popen(cmd, cwd=d, stdout=lf, stderr=lf)
+        if x and len(DOSBOX) == 1:                    # not for a Flatpak DOSBox-X: its process id is another one
+            alt_enter_fullscreen(proc.pid)
+        return proc.wait()
 
 
 def check(path):
