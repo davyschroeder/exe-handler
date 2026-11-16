@@ -102,6 +102,10 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
   `cycles` in `dos.conf` om dat vast te zetten.
 - **MIDI-muziek**: DOSBox-X krijgt de klankbank (SoundFont) van het systeem aangewezen; zonder blijven spellen met
   General MIDI-muziek stil.
+- **Netwerkshare en opslaan**: via Bestanden (`smb://...`, gvfs) kan een programma bestaande bestanden niet
+  wijzigen. Een DOS-SETUP die zijn stuurbestanden aanpast (Epic Pinball) of een spel dat een savebestand bijwerkt,
+  mislukt dan stil ("Please run SETUP!"). Is dezelfde share ook vast gekoppeld (cifs, bijvoorbeeld `/mnt/nas`), dan
+  gebruikt exe-handler automatisch dat pad en werkt opslaan wel.
 - **Programma's op een netwerkshare** die je in Bestanden opent (`smb://...`): DOSBox-X kan niet tegen de dubbele
   punt in zo'n pad; exe-handler koppelt de map via een snelkoppeling in `~/.cache/exe-handler/dos/`.
 - Instellingen: `~/.config/exe-handler/dos.conf` (wordt bij de eerste DOS-start aangemaakt).

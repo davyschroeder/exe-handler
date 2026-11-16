@@ -897,6 +897,36 @@ def run_dos(path, args):
         return proc.wait()
 
 
+def kernel_mount_path(path):
+    """A file opened from a network share in the file manager has a path like
+    /run/user/1000/gvfs/smb-share:server=nas,share=games/dir/GAME.EXE. That gvfs layer cannot change an existing
+    file in place ('Operation not supported'): a DOS setup that patches its driver files, or a game that updates a
+    save file, then fails silently. If the same share is also mounted by the kernel (cifs, e.g. /mnt/nas), use that
+    path instead; there everything works."""
+    import re
+    m = re.match(r"(/run/user/\d+/gvfs|.*/\.gvfs)/smb-share:([^/]*)(/.*)?$", path)
+    if not m:
+        return path
+    opts = dict(o.split("=", 1) for o in m.group(2).split(",") if "=" in o)
+    server, share, rest = opts.get("server", "").lower(), opts.get("share", "").lower(), m.group(3) or ""
+    short = lambda h: h.split(".")[0]
+    try:
+        mounts = [l.split() for l in open("/proc/mounts")]
+    except OSError:
+        return path
+    for f in mounts:
+        if len(f) > 2 and f[2] in ("cifs", "smb3", "smbfs") and f[0].startswith("//"):
+            host, _, sh = f[0][2:].partition("/")
+            if sh.lower().rstrip("/") == share and (host.lower() == server or short(host.lower()) == short(server)):
+                cand = f[1].replace("\\040", " ") + rest
+                if os.path.exists(cand):
+                    log(f"network share: using the kernel mount {f[1]} instead of the file manager's gvfs path")
+                    return cand
+    log("network share opened through the file manager (gvfs): programs cannot change existing files there; "
+        "mount the share with cifs (e.g. in /etc/fstab) if a program needs to save settings")
+    return path
+
+
 def check(path):
     """exe-handler --check FILE: what would happen, for troubleshooting."""
     path = os.path.abspath(path)
@@ -935,7 +965,7 @@ def main():
     if not a or a[0] in ("-h", "--help"):
         print(__doc__)
         return 0 if a else 2
-    path = os.path.abspath(a[0])
+    path = kernel_mount_path(os.path.abspath(a[0]))
     args = a[1:]
     if not os.path.isfile(path):
         tell(T(f"File not found: {path}", f"Bestand niet gevonden: {path}"), error=True)
