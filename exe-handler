@@ -587,7 +587,7 @@ keytogglefullscreen=0x00
 
 
 def old_directdraw(path):
-    """A 2D-era DirectDraw game: built for Windows 95-XP and uses ddraw.dll but not Direct3D 8/9."""
+    """A 2D-era DirectDraw game: built for Windows 95-XP, uses ddraw.dll, and is not a Direct3D (3D) game."""
     ver = pe_os_version(path)
     if not ver or ver[0] >= 6:
         return False
@@ -596,7 +596,10 @@ def old_directdraw(path):
             data = f.read(8 * 1024 * 1024).lower()
     except OSError:
         return False
-    return b"ddraw.dll" in data and not any(d in data for d in (b"d3d8.dll", b"d3d9.dll", b"opengl32.dll"))
+    if b"ddraw.dll" not in data or any(d in data for d in (b"d3d8.dll", b"d3d9.dll", b"opengl32.dll")):
+        return False
+    # Direct3D 5-7 games also load ddraw.dll, but draw in 3D; cnc-ddraw is for 2D games only (StarTopia broke)
+    return not any(m in data for m in (b"d3dx", b"d3dim", b"direct3d device", b"iid_idirect3d", b"d3dxerr"))
 
 
 def cnc_ddraw(path, e):
