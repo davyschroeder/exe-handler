@@ -114,7 +114,7 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
 
 | Bestand | Waar | Wat |
 |---|---|---|
-| `exe-handler.start` | naast de .exe | regels `Game.exe = Loader.exe`: start de loader als je Game.exe opent |
+| `exe-handler.start` | naast de .exe | regels `Game.exe = Loader.exe [opties]`: start de loader (met opties) als je Game.exe opent; `{screen}` wordt de resolutie van je hoofdscherm, bv. `StarTopia.exe = StarTopia.exe /r{screen}x32` |
 | `exe-handler.reg` | naast de .exe | registerbestand dat vóór elke start wordt ingelezen |
 | `exe-handler.no-ddraw` | naast de .exe | leeg bestand: geen cnc-ddraw voor dit spel |
 | `virtual-desktop.conf` | `~/.config/exe-handler/` | `spel.exe 1024x768`: in een eigen Wine-bureaublad van die grootte |

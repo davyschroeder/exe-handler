@@ -300,18 +300,45 @@ def next_to(path, *names):
     return None
 
 
-def alias(path):
-    """exe-handler.start next to the program: 'A.exe = B.exe' starts B when A is opened."""
+def primary_screen():
+    """'WIDTHxHEIGHT' of the primary monitor (else the first one, else the whole desktop), e.g. '2560x1440'."""
+    mons = monitors()
+    for name, (mode, pos, rate, primary) in mons.items():
+        if primary:
+            return mode
+    if mons:
+        return next(iter(mons.values()))[0]
+    size = screen_size()
+    return f"{size[0]}x{size[1]}" if size else "1920x1080"
+
+
+def start_line(path):
+    """exe-handler.start next to the program. Lines 'A.exe = B.exe [options]': opening A starts B with those
+    options; '{screen}' in the options becomes the primary monitor's resolution, e.g.
+        StarTopia.exe = StarTopia.exe /r{screen}x32
+    Returns (program, [options])."""
     f = next_to(path, "exe-handler.start", "run-exe.start")
     if f:
         for line in open(f, errors="replace"):
-            if "=" in line and not line.lstrip().startswith("#"):
+            if "=" in line and not line.lstrip().startswith(("#", ";")):
                 a, b = (x.strip() for x in line.split("=", 1))
-                target = os.path.join(os.path.dirname(path), b)
-                if a.lower() == os.path.basename(path).lower() and os.path.exists(target):
-                    log(f"start alias: {a} -> {b}")
-                    return target
-    return path
+                if a.lower() != os.path.basename(path).lower():
+                    continue
+                d = os.path.dirname(path)
+                if os.path.exists(os.path.join(d, b)):              # a name with spaces and no options
+                    name, opts = b, []
+                else:
+                    name, _, rest = b.partition(" ")
+                    opts = [o.replace("{screen}", primary_screen()) for o in rest.split()]
+                target = os.path.join(d, name)
+                if os.path.exists(target):
+                    log(f"exe-handler.start: {a} -> {name} {' '.join(opts)}".rstrip())
+                    return target, opts
+    return path, []
+
+
+def alias(path):
+    return start_line(path)[0]
 
 
 def listed(name, path):
@@ -647,7 +674,8 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
                "Wine kon niet worden klaargezet. Zie ~/.cache/exe-handler.log"), error=True)
         return 1
     keep_wine_ready(e)
-    path = alias(path)
+    path, start_opts = start_line(path)
+    args = start_opts + list(args)
     auto_settings(path, e)
     reg = next_to(path, "exe-handler.reg", "run-exe.reg")
     if reg:
