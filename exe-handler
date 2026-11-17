@@ -844,6 +844,38 @@ def ddraw_compat(path, e, cnc=True):
     return e
 
 
+# cnc-ddraw's built-in profiles for Tiberian Sun and Red Alert 2 (tshack=true): the game draws at the window's size
+# instead of being scaled up, and maximising a normal window snaps back under Wine. Borderless fullscreen works.
+CNC_TSHACK = ("game", "gamemd", "sun", "ts-spawn", "ra2", "ra2md", "red alert 2", "yr")
+CNC_TSHACK_INI = """fullscreen=true
+windowed=true
+toggle_borderless=true
+keytogglefullscreen=0x0D
+"""
+
+
+def cnc_tshack_sections(d, ini):
+    """Tiberian Sun / Red Alert 2 (game.exe, gamemd.exe): borderless fullscreen at the screen's own resolution, the
+    game then fills the screen with a correct mouse. Alt+Enter switches to a window and back. Only in a ddraw.ini
+    written by exe-handler, and only for .exe files in the folder that cnc-ddraw treats this way."""
+    try:
+        text = open(ini, errors="replace").read()
+        if not text.startswith(CNC_MARK):
+            return
+        have = {m.strip().lower() for m in re.findall(r"(?m)^\[([^\]]+)\]", text)}
+        add = sorted({os.path.splitext(n)[0] for n in os.listdir(d) if n.lower().endswith(".exe")
+                      and os.path.splitext(n)[0].lower() in CNC_TSHACK and os.path.splitext(n)[0].lower() not in have})
+        if not add:
+            return
+        with open(ini, "a") as f:
+            f.write("\n; Tiberian Sun / Red Alert 2: borderless fullscreen (Alt+Enter = window), the game draws at screen size\n")
+            for n in add:
+                f.write(f"[{n}]\n{CNC_TSHACK_INI}")
+        log(f"cnc-ddraw: borderless fullscreen for {', '.join(add)} (Alt+Enter switches to a window)")
+    except OSError as err:
+        log(f"cnc-ddraw: ddraw.ini not extended ({err})")
+
+
 def cnc_ddraw(path, e):
     """Old DirectDraw games ask the monitor for 320x200 or 640x480 in 256 colours. Today's screens refuse ('Could
     not set video mode'), or the whole desktop is rearranged. Put cnc-ddraw next to the game (once) and let Wine
@@ -886,6 +918,7 @@ def cnc_ddraw(path, e):
             log(f"cnc-ddraw not placed next to the game ({err})")
             return e
         log(f"cnc-ddraw placed in {d} (old DirectDraw game: scaled window instead of a mode switch)")
+    cnc_tshack_sections(d, ini)
     e = dict(e)
     e["WINEDLLOVERRIDES"] = "ddraw=n,b" + (";" + e["WINEDLLOVERRIDES"] if e.get("WINEDLLOVERRIDES") else "")
     return e

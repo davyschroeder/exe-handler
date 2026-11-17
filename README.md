@@ -121,6 +121,11 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
   hulpmiddel voor Windows 10/11 dat in Wine meteen crasht. exe-handler herkent die, hernoemt hem naar
   `ddraw.dll.DDrawCompat` (terugzetten = terug hernoemen) en gebruikt cnc-ddraw; zonder cnc-ddraw Wine's eigen
   DirectDraw.
+- **Tiberian Sun en Red Alert 2** (`game.exe`, `gamemd.exe`): cnc-ddraw schaalt deze spellen niet op maar laat ze
+  tekenen op de grootte van het venster, en een gemaximaliseerd venster springt onder Wine terug. exe-handler zet ze
+  daarom randloos schermvullend op de resolutie van het scherm (Alt+Enter = venster en terug). Het hoofdmenu blijft
+  800x600, dat doet het spel zelf; in een potje vult het slagveld het hele scherm. Een cnc-ddraw naast een spel telt
+  niet als Direct3D 9 (geen DXVK).
 - **Haperen bij het starten**: start Wine vanaf nul, dan leest het een tiental keer alle monitoren opnieuw uit; bij
   meerdere schermen staat het bureaublad daarbij telkens even stil (gemeten op drie schermen: 12 keer, samen
   2 seconden). exe-handler laat de Wine-server daarom aanstaan na het eerste Windows-programma: alleen dat eerste
