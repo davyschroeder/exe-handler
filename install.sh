@@ -130,7 +130,7 @@ pkg_try() {
   done
 }
 
-[ "$ARCH" = aarch64 ] && TOTAL=7
+[ "$ARCH" = aarch64 ] && TOTAL=8      # no cnc-ddraw on ARM
 [ $BINFMT = 1 ] || TOTAL=$((TOTAL - 1))
 echo "   Everything that runs quietly is written to $ILOG"
 if [ -n "$SUDO" ] && [ $DRY = 0 ]; then
