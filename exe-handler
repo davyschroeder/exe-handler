@@ -23,7 +23,7 @@ Per user (optional):
   ~/.config/exe-handler/dos.conf               DOSBox-X settings (created on first DOS start)
 System settings (written by install.sh): /etc/exe-handler.conf
 """
-import os, shlex, shutil, struct, subprocess, sys, time
+import os, re, shlex, shutil, struct, subprocess, sys, time
 
 HOME = os.path.expanduser("~")
 CONF = os.environ.get("EXE_HANDLER_CONF", "/etc/exe-handler.conf")
@@ -122,6 +122,84 @@ def pe_os_version(path):
             return struct.unpack("<HH", opt[48:52])
     except (OSError, struct.error):
         return None
+
+
+def pe_imports(path):
+    """Names of the DLLs a Windows program imports directly (lower case), or [] when it cannot be read."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(64 * 1024 * 1024)
+        pe = struct.unpack("<I", data[60:64])[0]
+        if data[pe:pe + 4] != b"PE\0\0":
+            return []
+        nsect, optsize = struct.unpack("<H", data[pe + 6:pe + 8])[0], struct.unpack("<H", data[pe + 20:pe + 22])[0]
+        opt = pe + 24
+        magic = struct.unpack("<H", data[opt:opt + 2])[0]
+        ddir = opt + (112 if magic == 0x20B else 96)
+        imp_rva = struct.unpack("<I", data[ddir + 8:ddir + 12])[0]
+        sections = []
+        for i in range(nsect):
+            sh = opt + optsize + 40 * i
+            vsize, va, rawsize, raw = struct.unpack("<IIII", data[sh + 8:sh + 24])
+            sections.append((va, max(vsize, rawsize), raw))
+
+        def off(rva):
+            for va, size, raw in sections:
+                if va <= rva < va + size:
+                    return rva - va + raw
+            return None
+        o, names = off(imp_rva), []
+        while o is not None and o + 20 <= len(data):
+            name_rva = struct.unpack("<I", data[o + 12:o + 16])[0]
+            if not name_rva:
+                break
+            n = off(name_rva)
+            if n is not None:
+                names.append(data[n:data.index(b"\0", n)].decode("ascii", "replace").lower())
+            o += 20
+        return names
+    except (OSError, struct.error, ValueError):
+        return []
+
+
+def wine_builtin_dirs(win64):
+    """Folders with Wine's own Windows DLLs (i386-windows or x86_64-windows) for the Wine that exe-handler uses."""
+    sub = "x86_64-windows" if win64 else "i386-windows"
+    exe = shutil.which(WINE[-1]) or WINE[-1]
+    base = os.path.dirname(os.path.realpath(exe))
+    cands = [os.path.join(base, "..", lib, "wine", sub) for lib in ("lib", "lib64", "lib32")]
+    cands += [f"/usr/lib/wine/{sub}", f"/usr/lib64/wine/{sub}", f"/usr/lib/i386-linux-gnu/wine/{sub}",
+              f"/usr/lib/x86_64-linux-gnu/wine/{sub}"]
+    return [os.path.normpath(c) for c in cands if os.path.isdir(c)]
+
+
+def missing_dlls(path, e):
+    """DLLs the program imports that are neither next to it, nor in the Wine folder, nor built into Wine.
+    Old programs often relied on a DLL that Windows 95/98 or another program had put in C:\\WINDOWS\\SYSTEM
+    (MFC30.DLL, CNCS32.DLL, VBRUN300.DLL); Wine then stops right away without saying which one."""
+    k = kind(path)[0]
+    if k not in ("win32", "win64"):
+        return []
+    builtin = wine_builtin_dirs(k == "win64")
+    if not builtin:
+        return []                                   # cannot tell what Wine brings itself: say nothing
+    win = os.path.join(e["WINEPREFIX"], "drive_c", "windows")
+    sysdir = os.path.join(win, "system32" if k == "win64" or not os.path.isdir(os.path.join(win, "syswow64"))
+                          else "syswow64")
+    have = set()
+    for d in [os.path.dirname(path), sysdir, win] + builtin + [x for x in e.get("WINEPATH", "").split(";") if x]:
+        try:
+            have.update(n.lower() for n in os.listdir(d))
+        except OSError:
+            pass
+    return [d for d in pe_imports(path) if d not in have]
+
+
+def system_dir(path, e):
+    win = os.path.join(e["WINEPREFIX"], "drive_c", "windows")
+    if kind(path)[0] == "win32" and os.path.isdir(os.path.join(win, "syswow64")):
+        return os.path.join(win, "syswow64")
+    return os.path.join(win, "system32")
 
 
 def env_wine():
@@ -661,6 +739,73 @@ def cnc_ddraw(path, e):
     return e
 
 
+DXVK = os.environ.get("EXE_HANDLER_DXVK", "/opt/exe-handler/dxvk")     # x32/ and x64/ from https://github.com/doitsujin/dxvk (install.sh)
+DXVK_DLLS = ("d3d8", "d3d9", "d3d10core", "d3d11", "dxgi")
+DXVK_MARK = "exe-handler.dxvk"
+
+
+def gpu_lacks_dxvk():
+    """True when Vulkan shows real GPUs but none has multiDrawIndirect, a feature DXVK requires (the Raspberry Pi
+    5's V3D lacks it). DXVK then only works on llvmpipe, Mesa's software Vulkan: slow, but it starts."""
+    try:
+        out = subprocess.run(["vulkaninfo"], capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    gpus = re.split(r"\nGPU\d+:\n", out)[1:]
+    real = [g for g in gpus if "PHYSICAL_DEVICE_TYPE_CPU" not in g]
+    if not real:
+        return False
+    return all(re.search(r"multiDrawIndirect\s*=\s*(false|0)\b", g) for g in real)
+
+
+def dxvk(path, e):
+    """Programs named in ~/.config/exe-handler/dxvk.conf use DXVK (Direct3D 8-11 via Vulkan) instead of Wine's
+    own Direct3D: put DXVK's DLLs next to the program (once) and let Wine prefer them for this run. Needed for
+    Direct3D 11 games that Wine's OpenGL-based Direct3D cannot start (Unity games, 'failed to create device')."""
+    if not listed("dxvk.conf", path):
+        return e
+    k = kind(path)[0]
+    src = os.path.join(DXVK, "x64" if k == "win64" else "x32")
+    if not os.path.isdir(src):
+        log(f"dxvk.conf names this program, but DXVK is not in {DXVK} (run install.sh)")
+        return e
+    d = os.path.dirname(path)
+    mark = os.path.join(d, DXVK_MARK)
+    ours = set()
+    try:
+        ours = {l.strip() for l in open(mark) if l.strip() and not l.startswith("#")}
+    except OSError:
+        pass
+    placed = []
+    for n in DXVK_DLLS:
+        s_, t_ = os.path.join(src, n + ".dll"), os.path.join(d, n + ".dll")
+        if not os.path.exists(s_) or (os.path.exists(t_) and n + ".dll" not in ours):
+            continue                              # not in DXVK, or the program brings its own
+        try:
+            if not os.path.exists(t_):
+                shutil.copyfile(s_, t_)
+            placed.append(n + ".dll")
+        except OSError as err:
+            log(f"DXVK: {n}.dll not placed next to the program ({err})")
+    if not placed:
+        return e
+    if set(placed) != ours:
+        try:
+            with open(mark, "w") as f:
+                f.write("# DLLs placed by exe-handler for DXVK (dxvk.conf). Delete them and this file to stop.\n")
+                f.write("\n".join(placed) + "\n")
+        except OSError:
+            pass
+        log(f"DXVK placed in {d}: {', '.join(placed)}")
+    e = dict(e)
+    names = ",".join(p[:-4] for p in placed)
+    e["WINEDLLOVERRIDES"] = f"{names}=n,b" + (";" + e["WINEDLLOVERRIDES"] if e.get("WINEDLLOVERRIDES") else "")
+    if "DXVK_FILTER_DEVICE_NAME" not in e and gpu_lacks_dxvk():
+        e["DXVK_FILTER_DEVICE_NAME"] = "llvmpipe"
+        log("DXVK: the GPU lacks multiDrawIndirect, so software Vulkan (llvmpipe): slow, but it runs")
+    return e
+
+
 def run_wine(path, args, console, msi=False, prefix=None, e=None):
     if not page_size_ok():
         return 1
@@ -689,6 +834,8 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
     size = None if (prefix or msi) else (virtual_desktop(path) or auto_desktop(path))
     if not (size or prefix or msi):
         e = cnc_ddraw(path, e)
+    if not (prefix or msi):
+        e = dxvk(path, e)
     if (size or listed("x11.conf", path)) and e.get("DISPLAY") and e.get("WAYLAND_DISPLAY"):
         # Wine's Wayland driver has no virtual desktop, and some games need X11 for the mouse: use the X11 driver
         e = dict(e)
@@ -715,6 +862,16 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
         restore_monitors(before)
     log(f"wine finished rc={rc} after {time.time() - start:.0f}s")
     if rc not in (0, None) and time.time() - start < 5:
+        missing = [] if (prefix or msi) else missing_dlls(path, e)
+        if missing:
+            names, where = ", ".join(m.upper() for m in missing), system_dir(path, e)
+            log(f"missing DLL(s): {names}")
+            tell(T(f"{os.path.basename(path)} cannot start: {names} is missing. Put that file next to the program "
+                   f"or in {where} (it often comes with the program's installer or with Windows 95/98).",
+                   f"{os.path.basename(path)} kan niet starten: {names} ontbreekt. Zet dat bestand naast het "
+                   f"programma of in {where} (het zit vaak in de installer van het programma of in Windows 95/98)."),
+                 error=True)
+            return rc
         tell(T(f"{os.path.basename(path)} stopped right away (code {rc}). See ~/.cache/exe-handler.log",
                f"{os.path.basename(path)} stopte meteen (code {rc}). Zie ~/.cache/exe-handler.log"), error=True)
     return rc

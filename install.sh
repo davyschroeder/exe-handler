@@ -40,6 +40,9 @@ OTVDM_SHA256=842b11aed5fa81f3e1d4272e0ee7d37f1a5a8f936de825309dda672835e16fd4
 CNC_VERSION=v7.1.0.0
 CNC_URL=https://github.com/FunkyFr3sh/cnc-ddraw/releases/download/$CNC_VERSION/cnc-ddraw.zip
 CNC_SHA256=0b13ab89a64c9918189b1dadd449ef6ed3cb3b7b19cabd96d8adbd95505bb908
+DXVK_VERSION=3.1.1
+DXVK_URL=https://github.com/doitsujin/dxvk/releases/download/v$DXVK_VERSION/dxvk-$DXVK_VERSION.tar.gz
+DXVK_SHA256=40565b4a724aadc4433fa4e010b4b23916d9b1f1baeee64e17186db94f54e608
 
 say()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
@@ -47,7 +50,7 @@ die()  { printf '\033[1;31mXX\033[0m %s\n' "$*" >&2; exit 1; }
 run()  { if [ $DRY = 1 ]; then echo "   [dry-run] $*"; else "$@"; fi; }
 
 # ---------- telling what is going on ----------
-T0=$(date +%s); STEP=0; TOTAL=8
+T0=$(date +%s); STEP=0; TOTAL=9
 ILOG=$(mktemp /tmp/exe-handler-install.XXXXXX.log)     # full output of everything that runs quietly
 elapsed() { local t=$(( $(date +%s) - ${1:-$T0} )); printf '%d:%02d' $((t / 60)) $((t % 60)); }
 step() { STEP=$((STEP + 1)); printf '\n\033[1;34m[%d/%d]\033[0m \033[1m%s\033[0m  \033[2m(%s)\033[0m\n' "$STEP" "$TOTAL" "$*" "$(elapsed)"; }
@@ -288,6 +291,23 @@ install_cnc_ddraw() {
   rm -rf "$t"
 }
 
+install_dxvk() {
+  # DXVK (Direct3D 8-11 via Vulkan), only used for programs named in ~/.config/exe-handler/dxvk.conf (see dxvk in exe-handler)
+  [ -f "$OPT/dxvk/x64/d3d11.dll" ] && { step "DXVK for Direct3D 11 games"; echo "   =  already in $OPT/dxvk"; return; }
+  step "DXVK $DXVK_VERSION for Direct3D 11 games (only for programs in dxvk.conf)"
+  doing "downloading $DXVK_URL and checking its sha256"
+  local t; t=$(mktemp -d)
+  run curl -fsSL -o "$t/dxvk.tar.gz" "$DXVK_URL" || { warn "DXVK download failed, skipped"; return; }
+  if [ $DRY = 0 ]; then
+    echo "$DXVK_SHA256  $t/dxvk.tar.gz" | sha256sum -c --quiet - || { warn "DXVK download does not match the expected sha256, skipped"; return; }
+  fi
+  run tar xzf "$t/dxvk.tar.gz" -C "$t"
+  sudo_run mkdir -p "$OPT/dxvk/x32" "$OPT/dxvk/x64"
+  sudo_run install -m 644 "$t/dxvk-$DXVK_VERSION"/x32/*.dll "$OPT/dxvk/x32/"
+  sudo_run install -m 644 "$t/dxvk-$DXVK_VERSION"/x64/*.dll "$OPT/dxvk/x64/"
+  rm -rf "$t"
+}
+
 case $ARCH in
   x86_64|i686) install_wine_x86; install_cnc_ddraw ;;
   aarch64)
@@ -305,6 +325,7 @@ case $ARCH in
     fi ;;
   *) warn "Windows programs are not supported on $ARCH (only x86 and ARM64). DOS programs will work." ;;
 esac
+case $ARCH in x86_64|i686|aarch64) install_dxvk ;; esac
 [ -n "$WINE_CMD" ] && ok "Windows programs will use: $WINE_CMD" || warn "no Wine available"
 
 # ---------- the handler itself ----------
@@ -412,6 +433,7 @@ printf '\n\033[1;32mDone in %s.\033[0m\n' "$(elapsed)"
 echo "   DOS programs:      ${DOSBOX_CMD:-not available}"
 echo "   Windows programs:  ${WINE_CMD:-not available}$(command -v ${WINE_CMD%% *} >/dev/null 2>&1 && [ "$ARCH" != aarch64 ] && echo "  ($(wine --version 2>/dev/null))")"
 [ -f "$OPT/cnc-ddraw/ddraw.dll" ] && echo "   Old DirectDraw:    cnc-ddraw in $OPT/cnc-ddraw"
+[ -f "$OPT/dxvk/x64/d3d11.dll" ] && echo "   Direct3D 11:       DXVK in $OPT/dxvk (for programs in ~/.config/exe-handler/dxvk.conf)"
 echo "   Details of this run: $ILOG"
 if [ "${TIP_WARMUP:-0}" = 1 ]; then
   echo "   Tip: this computer has $MONITORS monitors. The first Windows program after login can make the desktop"

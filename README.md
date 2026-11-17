@@ -53,14 +53,16 @@ Box64). Box64 komt uit de apt-bron van Pi-Apps-Coders; op andere distributies wo
    - Raspberry Pi 5 met 16K-geheugenpagina's: biedt aan om `kernel=kernel8.img` in te stellen (Wine heeft 4K nodig).
 4. **cnc-ddraw** (alleen x86) in `/opt/exe-handler/cnc-ddraw`, voor oude DirectDraw-spellen (download gecontroleerd
    met sha256).
-5. **`/usr/local/bin/exe-handler`** (dit programma) en `/etc/exe-handler.conf` (welke Wine/DOSBox gebruikt wordt).
-6. **Dubbelklikken**: een `.desktop`-bestand voor alle exe-bestandstypen, standaard gemaakt voor jouw gebruiker
+5. **DXVK** 3.1.1 in `/opt/exe-handler/dxvk` (x86 en ARM64, download gecontroleerd met sha256), alleen gebruikt
+   voor programma's die je in `dxvk.conf` zet (zie hieronder).
+6. **`/usr/local/bin/exe-handler`** (dit programma) en `/etc/exe-handler.conf` (welke Wine/DOSBox gebruikt wordt).
+7. **Dubbelklikken**: een `.desktop`-bestand voor alle exe-bestandstypen, standaard gemaakt voor jouw gebruiker
    (gaat ook boven Wine's eigen loader of Zorin's "Windows App Support"-melding). Rechtsklik heeft
    *Openen in DOSBox* en *Openen in Wine* om zelf te kiezen.
-7. **Kernelregel (binfmt_misc)**: elk bestand dat met "MZ" begint en uitvoerbaar is, gaat naar exe-handler.
+8. **Kernelregel (binfmt_misc)**: elk bestand dat met "MZ" begint en uitvoerbaar is, gaat naar exe-handler.
    Daardoor werken ook `.exe`-bestanden op exFAT/NTFS-schijven (waar alles "uitvoerbaar" is) en `./spel.exe`
    in een terminal. Uitzetten met `--no-binfmt`.
-8. **Wine-map** `~/.wine` wordt alvast aangemaakt, zodat de eerste dubbelklik snel is.
+9. **Wine-map** `~/.wine` wordt alvast aangemaakt, zodat de eerste dubbelklik snel is.
 
 Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het pad staat aan het begin en het eind.
 
@@ -75,6 +77,17 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
   spel draait dan in een gewoon venster dat je kunt vergroten en maximaliseren, het beeld schaalt mee. Gebruik de
   maximaliseerknop voor een groot beeld; de eigen volledig-scherm-toets van het spel (Alt+Enter) werkt dan niet.
   Uitzetten per spel: maak een leeg bestand `exe-handler.no-ddraw` naast de .exe en verwijder `ddraw.dll`/`ddraw.ini`.
+- **Ontbrekende DLL**: stopt een programma meteen, dan kijkt exe-handler welke DLL's het nodig heeft die niet naast
+  het programma, niet in de Wine-map en niet in Wine zelf zitten, en noemt die bij naam (bijvoorbeeld *"CNCS32.DLL
+  ontbreekt"*). Oude programma's rekenden vaak op een DLL die Windows 95/98 of een ander programma al had
+  geplaatst (MFC30.DLL, CNCS32.DLL); zet dat bestand naast de .exe of in `~/.wine/drive_c/windows/syswow64`
+  (32-bit) of `system32` (64-bit).
+- **Direct3D 11-spellen** (bijvoorbeeld Unity-spellen, foutmelding *"failed to create device"*): zet de naam van de
+  .exe in `~/.config/exe-handler/dxvk.conf`. exe-handler zet dan eenmalig de DLL's van
+  [DXVK](https://github.com/doitsujin/dxvk) naast het spel (lijstje in `exe-handler.dxvk`) en laat Wine die voor dit
+  spel gebruiken. Heeft de grafische kaart een functie niet die DXVK nodig heeft (de Raspberry Pi 5 mist
+  `multiDrawIndirect`), dan gebruikt DXVK Mesa's software-Vulkan (llvmpipe): het spel start, maar traag. Terug:
+  naam uit `dxvk.conf` halen en de DLL's uit `exe-handler.dxvk` plus dat bestand verwijderen.
 - **Andere programma's die de schermresolutie wisselen**: Wine 10 en nieuwer bootst die wissel na
   (`EmulateModeset`), je echte monitor en de indeling van meerdere schermen blijven zoals ze zijn. Als vangnet zet
   exe-handler na afloop de monitoren terug als een programma ze toch heeft veranderd (bijvoorbeeld na een crash).
@@ -118,6 +131,7 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
 | `exe-handler.reg` | naast de .exe | registerbestand dat vóór elke start wordt ingelezen |
 | `exe-handler.no-ddraw` | naast de .exe | leeg bestand: geen cnc-ddraw voor dit spel |
 | `virtual-desktop.conf` | `~/.config/exe-handler/` | `spel.exe 1024x768`: in een eigen Wine-bureaublad van die grootte |
+| `dxvk.conf` | `~/.config/exe-handler/` | `spel.exe` per regel: Direct3D 8-11 via DXVK (Vulkan) in plaats van Wine's eigen Direct3D |
 | `x11.conf` | `~/.config/exe-handler/` | `spel.exe` per regel: op een Wayland-bureaublad toch Wine's X11-weergave gebruiken (muis in sommige spellen) |
 | `dos.conf` | `~/.config/exe-handler/` | DOSBox-X-instellingen |
 
@@ -159,6 +173,10 @@ ARM uit. Het passend maken van vensters werkt op X11 (ook via XWayland), niet vo
   through cnc-ddraw (x86) instead of a 320x200/640x480 mode switch; old Visual Basic programs in a fitted virtual
   desktop window (they overflow on screens wider than 2184 pixels); the wineserver stays on so that only the first
   program of a session can stutter on multi-monitor desktops (`--warmup-at-login` moves that to the login).
+- **Missing DLLs**: when a program stops right away, exe-handler names the DLLs it imports that are neither next
+  to it, nor in the Wine folder, nor built into Wine (e.g. MFC30.DLL, CNCS32.DLL from the Windows 95/98 era).
+- **Direct3D 11 games**: list the .exe in `~/.config/exe-handler/dxvk.conf` to use DXVK (Vulkan) for that game only;
+  on GPUs without `multiDrawIndirect` (Raspberry Pi 5) it falls back to llvmpipe, Mesa's software Vulkan (slow).
 - **DOS programs**: resizable window, F12+F fullscreen, mouse caught on click (Ctrl+F10 releases), speed chosen
   from the program's date, a sound font for General MIDI, folders on network shares mounted through a symlink.
 
@@ -169,6 +187,7 @@ Third-party software that the installer downloads: [Wine](https://www.winehq.org
 [Kron4ek](https://github.com/Kron4ek/Wine-Builds), [Box64](https://github.com/ptitSeb/box64) via
 [Pi-Apps-Coders/box64-debs](https://github.com/Pi-Apps-Coders/box64-debs),
 [otvdm/winevdm](https://github.com/otya128/winevdm), [cnc-ddraw](https://github.com/FunkyFr3sh/cnc-ddraw),
+[DXVK](https://github.com/doitsujin/dxvk),
 [DOSBox-X](https://dosbox-x.com).
 
 ## Licentie / License
