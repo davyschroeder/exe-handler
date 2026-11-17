@@ -80,10 +80,12 @@ sudo_run() { if [ -n "$SUDO" ]; then run sudo "$@"; else run "$@"; fi; }
 ask() { [ $YES = 1 ] && return 0; read -r -p "$1 [Y/n] " r; [[ ! "$r" =~ ^[nN] ]]; }
 # which version of a downloaded part is in $OPT (a part installed before these markers counts as current)
 version_of() {
-  local f="$OPT/.version-$1"
-  if [ -f "$f" ]; then cat "$f"
-  elif [ -e "$OPT/$1" ]; then case $1 in wine) echo "$WINE_ARM_VERSION" ;; otvdm) echo "$OTVDM_SHA256" ;;
-                                          cnc-ddraw) echo "$CNC_VERSION" ;; dxvk) echo "$DXVK_VERSION" ;; esac; fi
+  local f="$OPT/.version-$1" v=""
+  if [ -f "$f" ]; then cat "$f"; return; fi
+  [ -e "$OPT/$1" ] || return 0
+  case $1 in wine) v=$WINE_ARM_VERSION ;; otvdm) v=$OTVDM_SHA256 ;; cnc-ddraw) v=$CNC_VERSION ;; dxvk) v=$DXVK_VERSION ;; esac
+  set_version "$1" "$v" >&2              # remember it, so a later version in install.sh is seen as newer
+  echo "$v"
 }
 set_version() { run bash -c "echo '$2' | $SUDO tee '$OPT/.version-$1' >/dev/null"; }
 
