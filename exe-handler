@@ -71,9 +71,9 @@ def tell(msg, error=False):
     """Message in a dialog (also when started from the file manager), else on the terminal."""
     log(("ERROR: " if error else "") + msg)
     if has_display():
-        for tool, args in (("zenity", ["--error" if error else "--info", "--no-wrap", "--title=EXE", f"--text={msg}"]),
-                           ("kdialog", ["--error" if error else "--msgbox", msg, "--title", "EXE"]),
-                           ("notify-send", ["EXE", msg])):
+        for tool, args in (("zenity", ["--error" if error else "--info", "--no-wrap", "--title=exe-handler", f"--text={msg}"]),
+                           ("kdialog", ["--error" if error else "--msgbox", msg, "--title", "exe-handler"]),
+                           ("notify-send", ["exe-handler", msg])):
             if shutil.which(tool):
                 subprocess.run([tool] + args, stderr=subprocess.DEVNULL)
                 return
@@ -473,6 +473,22 @@ def runtime_in_parent(path):
     return up if vb and not any(n in here for n in vb) else None
 
 
+def win16_runtimes(folder, e):
+    """16-bit programs run in otvdm, which does not search WINEPATH. Windows 3.1 kept the Visual Basic runtimes in
+    C:\\WINDOWS\\SYSTEM: copy the ones from the folder above the program there (once, never overwriting)."""
+    sysdir = os.path.join(e["WINEPREFIX"], "drive_c", "windows", "system")
+    try:
+        os.makedirs(sysdir, exist_ok=True)
+        have = {n.lower() for n in os.listdir(sysdir)}
+        for n in os.listdir(folder):
+            low = n.lower()
+            if low.endswith(".dll") and any(low.startswith(r.decode()) for r in VB_RUNTIMES) and low not in have:
+                shutil.copy2(os.path.join(folder, n), os.path.join(sysdir, n))
+                log(f"Visual Basic runtime {n} from {folder} copied to C:\\windows\\system (16-bit program)")
+    except OSError as err:
+        log(f"could not copy the Visual Basic runtime from {folder} ({err})")
+
+
 def screen_size():
     """Total desktop size in pixels (all monitors together), or None.
     xrandr (X11 and XWayland), then xdpyinfo, then the monitors the kernel reports (also without X)."""
@@ -591,7 +607,7 @@ def wine_frame(wid, w, maximised):
     return left, cap - left + (1 if not maximised and left else 0)
 
 
-def fit_desktop(name, size):
+def fit_desktop(name, size, fit=True):
     """A Wine virtual desktop (used for Visual Basic programs, see auto_desktop) as a tidy normal window.
     Wine 10 shows it borderless and fullscreen on one monitor with the program in a corner. This gives it a title
     bar again and makes it exactly as large as the program's window, so it looks like one window that can be
@@ -600,7 +616,7 @@ def fit_desktop(name, size):
     if not (os.environ.get("DISPLAY") and shutil.which("wmctrl")):
         return
     import threading
-    can_fit = bool(shutil.which("xwininfo") and shutil.which("xdotool"))
+    can_fit = fit and bool(shutil.which("xwininfo") and shutil.which("xdotool"))
 
     def wm(*a):
         subprocess.run(["wmctrl", "-i", "-r", desk] + list(a), stderr=subprocess.DEVNULL)
@@ -705,6 +721,24 @@ def old_directdraw(path):
         return False
     # Direct3D 5-7 games also load ddraw.dll, but draw in 3D; cnc-ddraw is for 2D games only (StarTopia broke)
     return not any(m in data for m in (b"d3dx", b"d3dim", b"direct3d device", b"iid_idirect3d", b"d3dxerr"))
+
+
+def ddraw_compat(path, e):
+    """Re-releases of old games (Red Alert 2, ...) ship DDrawCompat as ddraw.dll: a fix for Windows 10/11 that
+    crashes under Wine (access violation in ddraw.dll, the game stops at once). Use Wine's own DirectDraw then."""
+    dll = next_to(path, "ddraw.dll", "DDRAW.dll", "DDRAW.DLL")
+    if not dll:
+        return e
+    try:
+        with open(dll, "rb") as f:
+            if b"DDrawCompat" not in f.read():
+                return e
+    except OSError:
+        return e
+    log("ddraw.dll next to the program is DDrawCompat (crashes in Wine): Wine's own DirectDraw is used instead")
+    e = dict(e)
+    e["WINEDLLOVERRIDES"] = "ddraw=b" + (";" + e["WINEDLLOVERRIDES"] if e.get("WINEDLLOVERRIDES") else "")
+    return e
 
 
 def cnc_ddraw(path, e):
@@ -881,25 +915,33 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
         wine("regedit", "/S", "Z:" + reg.replace("/", "\\"), e=e)
         log(f"registry imported: {reg}")
     extra = runtime_in_parent(path) if is_visual_basic(path) else None
-    if extra:
+    if extra and kind(path)[0] == "win16":
+        win16_runtimes(extra, e)
+    elif extra:
         e = dict(e)
         e["WINEPATH"] = extra + (";" + e["WINEPATH"] if e.get("WINEPATH") else "")
         log(f"runtime DLLs found one folder up: WINEPATH={extra}")
-    size = None if (prefix or msi) else (virtual_desktop(path) or auto_desktop(path))
+    chosen = None if (prefix or msi) else virtual_desktop(path)     # from virtual-desktop.conf: keep that size
+    size = chosen or (None if (prefix or msi) else auto_desktop(path))
+    if not (prefix or msi):
+        e = ddraw_compat(path, e)
     if not (size or prefix or msi):
         e = cnc_ddraw(path, e)
     if not (prefix or msi):
         e = dxvk(path, e)
     if (size or listed("x11.conf", path)) and e.get("DISPLAY") and e.get("WAYLAND_DISPLAY"):
         # Wine's Wayland driver has no virtual desktop, and some games need X11 for the mouse: use the X11 driver
+        # Without WAYLAND_DISPLAY Wine's Wayland driver still finds the default socket (wayland-0); its half-failed
+        # start then makes the X11 driver fail to load under Box64 ("no driver could be loaded"). Switch it off.
         e = dict(e)
         e.pop("WAYLAND_DISPLAY")
+        e["WINEDLLOVERRIDES"] = "winewayland.drv=d" + (";" + e["WINEDLLOVERRIDES"] if e.get("WINEDLLOVERRIDES") else "")
         log("Wine X11 driver for this program (virtual desktop or listed in x11.conf)")
     if size:
         name = os.path.splitext(os.path.basename(path))[0]
         prefix = ["explorer", f"/desktop={name},{size}"]
         log(f"virtual desktop {size}")
-        fit_desktop(name, size)
+        fit_desktop(name, size, fit=not chosen)
     cmd = WINE + (prefix or []) + (["msiexec", "/i"] if msi else []) + [path] + args
     cwd = os.path.dirname(path)
     log("run " + shlex.join(cmd))
@@ -1023,6 +1065,24 @@ def dos_conf_update(conf):
         log("dos.conf: autolock set to true (mouse is caught on click, Ctrl+F10 releases)")
 
 
+def dated_program(path):
+    """The file whose date tells the age of a DOS program. A .bat file is often written later (or by hand):
+    use the .exe/.com it starts from its own folder, else the oldest .exe/.com there."""
+    if not path.lower().endswith(".bat"):
+        return path
+    d = os.path.dirname(path)
+    try:
+        progs = [n for n in os.listdir(d) if n.lower().endswith((".exe", ".com"))]
+        words = set(re.findall(r"[a-z0-9_~!$-]+", open(path, errors="replace").read().lower()))
+    except OSError:
+        return path
+    named = [n for n in progs if os.path.splitext(n)[0].lower() in words]
+    pick = named or progs
+    if not pick:
+        return path
+    return min((os.path.join(d, n) for n in pick), key=os.path.getmtime)
+
+
 def dos_cycles(path, conf):
     """Speed for real-mode DOS programs. DOSBox's own 'auto' gives them 3000 cycles (a slow 286), which is right
     for games from the 1980s but far too slow for 1990s games. Guess from the date of the program file;
@@ -1033,7 +1093,7 @@ def dos_cycles(path, conf):
         own = []
     if own and own[-1] != "auto":
         return None
-    year = time.localtime(os.path.getmtime(path)).tm_year
+    year = time.localtime(os.path.getmtime(dated_program(path))).tm_year
     if year < 1989:
         n = 3000
     elif year < 1992:

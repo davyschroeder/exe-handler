@@ -8,10 +8,12 @@ oude en nieuwe Windows-programma's, op een gewone PC (x86-64) en op een Raspberr
 ## Installeren
 
 ```bash
-git clone https://github.com/davyschroeder/exe-handler.git
-cd exe-handler
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/davyschroeder/exe-handler/main/install.sh | bash
 ```
+
+Dat ene commando haalt alles op en installeert alles wat nodig is (Wine of Box64 + Wine, DOSBox-X, otvdm,
+cnc-ddraw, DXVK, Vulkan). Git is niet nodig. Met een eigen kopie kan het ook:
+`git clone https://github.com/davyschroeder/exe-handler.git && cd exe-handler && ./install.sh`.
 
 Het script vraagt één keer om je wachtwoord (sudo) en laat per stap zien wat het doet. Daarna kun je meteen
 `.exe`-bestanden dubbelklikken.
@@ -20,7 +22,7 @@ Het script vraagt één keer om je wachtwoord (sudo) en laat per stap zien wat h
 |---|---|
 | `--dry-run` | alleen laten zien wat er zou gebeuren |
 | `--yes` | geen vragen stellen |
-| `--update` | alleen het programma exe-handler vervangen door de nieuwste versie van GitHub |
+| `--update` | de nieuwste versie van GitHub installeren, inclusief nieuwe onderdelen die erbij gekomen zijn |
 | `--warmup-at-login` | Wine na elke login alvast klaarzetten (zie *Haperen bij het starten*); weg met `--no-warmup-at-login` |
 | `--no-binfmt` | de kernelregel voor uitvoerbare `.exe`-bestanden overslaan |
 
@@ -102,6 +104,11 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
   exe-handler maakt er een gewoon venster met titelbalk van dat precies om het programma past, en schuift Wine's
   eigen titelbalk uit beeld, zodat je één venster ziet (op X11).
 - **Visual Basic-runtime één map hoger** (zoals op shareware-cd's, `VBRUN300.DLL` naast de spelmappen) wordt gevonden.
+  Voor 16-bit programma's zet exe-handler die runtime eenmalig in `C:\windows\system` van Wine (zoals Windows 3.1
+  dat deed); bestaande bestanden worden niet overschreven.
+- **DDrawCompat**: heruitgaven van oude spellen (bijvoorbeeld Red Alert 2) brengen een eigen `ddraw.dll` mee, een
+  hulpmiddel voor Windows 10/11 dat in Wine meteen crasht. exe-handler herkent die en gebruikt dan Wine's eigen
+  DirectDraw; het bestand blijft staan.
 - **Haperen bij het starten**: start Wine vanaf nul, dan leest het een tiental keer alle monitoren opnieuw uit; bij
   meerdere schermen staat het bureaublad daarbij telkens even stil (gemeten op drie schermen: 12 keer, samen
   2 seconden). exe-handler laat de Wine-server daarom aanstaan na het eerste Windows-programma: alleen dat eerste
@@ -116,7 +123,8 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
 - **Muis**: klik in het venster en de muis wordt gevangen, zodat bewegen werkt in spellen als Doom; **Ctrl+F10**
   laat hem weer los.
 - **Snelheid**: DOSBox geeft oude (real-mode) spellen standaard de snelheid van een trage 286. exe-handler kiest de
-  snelheid naar het jaartal van het programma (jaren 80: 3000 cycles, 1994 en later: 20000); zet zelf een getal bij
+  snelheid naar het jaartal van het programma (jaren 80: 3000 cycles, 1994 en later: 20000; bij een `.bat` het
+  jaartal van het programma dat die start); zet zelf een getal bij
   `cycles` in `dos.conf` om dat vast te zetten.
 - **MIDI-muziek**: DOSBox-X krijgt de klankbank (SoundFont) van het systeem aangewezen; zonder blijven spellen met
   General MIDI-muziek stil.
@@ -135,7 +143,7 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
 | `exe-handler.start` | naast de .exe | regels `Game.exe = Loader.exe [opties]`: start de loader (met opties) als je Game.exe opent; `{screen}` wordt de resolutie van je hoofdscherm, bv. `StarTopia.exe = StarTopia.exe /r{screen}x32` |
 | `exe-handler.reg` | naast de .exe | registerbestand dat vóór elke start wordt ingelezen |
 | `exe-handler.no-ddraw` | naast de .exe | leeg bestand: geen cnc-ddraw voor dit spel |
-| `virtual-desktop.conf` | `~/.config/exe-handler/` | `spel.exe 1024x768`: in een eigen Wine-bureaublad van die grootte |
+| `virtual-desktop.conf` | `~/.config/exe-handler/` | `spel.exe 1024x768`: in een eigen Wine-bureaublad van precies die grootte. Handig voor spellen die van resolutie wisselen: zonder schalen klopt de muis (bv. Red Alert 2: `Ra2.exe 1024x768`, en in `RA2.INI` dezelfde resolutie) |
 | `exe-handler.no-dxvk` | naast de .exe | leeg bestand: nooit DXVK voor dit spel |
 | `dxvk.conf` | `~/.config/exe-handler/` | `spel.exe` per regel: altijd DXVK, ook voor Direct3D 8/9 op een GPU die het niet aankan |
 | `no-dxvk.conf` | `~/.config/exe-handler/` | `spel.exe` per regel: nooit DXVK, Wine's eigen Direct3D |
@@ -148,9 +156,9 @@ via exe-handler gaat). Handmatig: `exe-handler [--dos|--wine] bestand.exe [argum
 
 ## Bijwerken
 
-`./install.sh --update` haalt de nieuwste versie van het programma exe-handler van GitHub en zet die op zijn
-plek. Wine, DOSBox-X en de instellingen blijven zoals ze zijn. Komt er een onderdeel bij (zoals cnc-ddraw), haal
-dan de map opnieuw op (`git pull`) en draai `./install.sh` nog een keer; wat er al staat wordt overgeslagen.
+`./install.sh --update` (of opnieuw het `curl … | bash`-commando) haalt de nieuwste versie van GitHub en
+installeert die. Wat er al staat en actueel is, wordt overgeslagen; nieuwe onderdelen (bijvoorbeeld DXVK) en
+nieuwere versies van DXVK, cnc-ddraw, otvdm of Wine komen erbij. Je instellingen en `~/.wine` blijven zoals ze zijn.
 
 ## Verwijderen
 
@@ -159,8 +167,13 @@ weg. Wine, DOSBox-X, Box64 en `~/.wine` blijven staan.
 
 ## Getest
 
-- **Raspberry Pi 5** (Raspberry Pi OS / Debian 13, arm64): schone installatie in een container; Wine 11.4 via
-  Box64, 32- en 64-bit, opdrachtregel en vensterprogramma's.
+- **Schone installatie in containers** (arm64 op een Raspberry Pi 5): Debian 13 en Ubuntu 24.04, met één
+  `./install.sh --yes`. Getest: DOS (Commander Keen, ook via een `.bat`), 16-bit Windows (Stars!), 16-bit Visual
+  Basic met de runtime één map hoger (WinPac), 32-bit Visual Basic (Poker Broker), DirectDraw (Jazz Jackrabbit 2),
+  de melding bij een ontbrekende DLL (Vortex zonder MFC30.DLL), Direct3D 9 (Cossacks) en 64-bit Direct3D 11 met
+  DXVK (Guinea Pig Boulder Garden). Een tweede `install.sh` duurt 7 seconden en slaat alles over.
+- **Raspberry Pi 5** (Raspberry Pi OS / Debian 13) als bureaublad: daarnaast Red Alert 2 (DDrawCompat, eigen
+  bureaublad van 1024x768) tot en met een gespeelde skirmish.
 - **Zorin OS 18** (x86-64) met Wine 10 en drie monitoren: DOS-spellen vanaf een netwerkshare (Aladdin), 16-bit
   Windows (Jixxa, Tinyjong, WinPac), Visual Basic (Poker Broker), DirectDraw (Jazz Jackrabbit 2), starten zonder
   haperen.
@@ -189,8 +202,9 @@ ARM uit. Het passend maken van vensters werkt op X11 (ook via XWayland), niet vo
 - **DOS programs**: resizable window, F12+F fullscreen, mouse caught on click (Ctrl+F10 releases), speed chosen
   from the program's date, a sound font for General MIDI, folders on network shares mounted through a symlink.
 
-Run `./install.sh` (`--dry-run` to preview). Update the program with `./install.sh --update`, uninstall with
-`./uninstall.sh`.
+Install everything with one command: `curl -fsSL https://raw.githubusercontent.com/davyschroeder/exe-handler/main/install.sh | bash`
+(or `./install.sh` in a clone; `--dry-run` to preview). `./install.sh --update` installs the newest version from
+GitHub including any new parts; uninstall with `./uninstall.sh`.
 
 Third-party software that the installer downloads: [Wine](https://www.winehq.org) builds by
 [Kron4ek](https://github.com/Kron4ek/Wine-Builds), [Box64](https://github.com/ptitSeb/box64) via

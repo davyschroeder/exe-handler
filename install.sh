@@ -7,7 +7,8 @@
 #           --no-binfmt  do not register .exe files with the kernel (see README)
 #           --warmup-at-login     get Wine ready in the background after every login: with several monitors the
 #                                 first Windows program then starts without stutter (--no-warmup-at-login removes it)
-#           --update     only replace the exe-handler program with the newest version from GitHub
+#           --update     download the newest version from GitHub and install it, including anything new it needs
+# Without a copy of the project:  curl -fsSL https://raw.githubusercontent.com/davyschroeder/exe-handler/main/install.sh | bash
 set -euo pipefail
 
 YES=0; DRY=0; BINFMT=1; WARMUP=0; UPDATE=0
@@ -19,12 +20,14 @@ for a in "$@"; do
     --warmup-at-login) WARMUP=1 ;;
     --no-warmup-at-login) WARMUP=-1 ;;
     --update|-u) UPDATE=1 ;;
-    -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
+    --from-github) ;;                         # internal: this copy was just downloaded
+    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
     *) echo "Unknown option: $a" >&2; exit 2 ;;
   esac
 done
 
-SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" && pwd)"
+REPO_TAR=https://github.com/davyschroeder/exe-handler/archive/refs/heads/main.tar.gz
 OPT=/opt/exe-handler
 BIN=/usr/local/bin/exe-handler
 CONF=/etc/exe-handler.conf
@@ -75,25 +78,32 @@ busy() {
 SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo
 sudo_run() { if [ -n "$SUDO" ]; then run sudo "$@"; else run "$@"; fi; }
 ask() { [ $YES = 1 ] && return 0; read -r -p "$1 [Y/n] " r; [[ ! "$r" =~ ^[nN] ]]; }
+# which version of a downloaded part is in $OPT (a part installed before these markers counts as current)
+version_of() {
+  local f="$OPT/.version-$1"
+  if [ -f "$f" ]; then cat "$f"
+  elif [ -e "$OPT/$1" ]; then case $1 in wine) echo "$WINE_ARM_VERSION" ;; otvdm) echo "$OTVDM_SHA256" ;;
+                                          cnc-ddraw) echo "$CNC_VERSION" ;; dxvk) echo "$DXVK_VERSION" ;; esac; fi
+}
+set_version() { run bash -c "echo '$2' | $SUDO tee '$OPT/.version-$1' >/dev/null"; }
 
-# ---------- --update: just the program itself, from GitHub ----------
-if [ $UPDATE = 1 ]; then
-  URL=https://raw.githubusercontent.com/davyschroeder/exe-handler/main/exe-handler
-  [ -e "$BIN" ] || die "exe-handler is not installed yet; run ./install.sh without --update first."
-  TMP=$(mktemp)
-  say "Downloading the newest exe-handler from GitHub"
-  if command -v curl >/dev/null; then curl -fsSL -o "$TMP" "$URL" || die "Download failed: $URL"
-  else wget -q -O "$TMP" "$URL" || die "Download failed: $URL"; fi
-  head -1 "$TMP" | grep -q python3 || die "The download is not the exe-handler program; nothing changed."
-  if cmp -s "$TMP" "$BIN"; then
-    say "Already the newest version."
-  else
-    sudo_run install -m 755 "$TMP" "$BIN"
-    say "exe-handler updated."
-  fi
-  rm -f "$TMP"
-  say "Done."
-  exit 0
+# ---------- --update, or started without the rest of the project (curl ... | bash): get it all from GitHub ----------
+# The downloaded install.sh then does a normal install: parts that are already there (and current) are skipped,
+# new parts (for example DXVK after an update) are added. So one command always leaves everything working.
+if [[ " $* " != *" --from-github "* ]] && { [ $UPDATE = 1 ] || [ ! -f "$SRC/exe-handler" ]; }; then
+  say "Downloading the newest exe-handler from GitHub: $REPO_TAR"
+  GH=$(mktemp -d)
+  if command -v curl >/dev/null; then curl -fsSL "$REPO_TAR" | tar -xz -C "$GH" || die "Download failed: $REPO_TAR"
+  elif command -v wget >/dev/null; then wget -qO- "$REPO_TAR" | tar -xz -C "$GH" || die "Download failed: $REPO_TAR"
+  else die "Neither curl nor wget is installed; install one of them first."; fi
+  NEW=$(echo "$GH"/*/install.sh)
+  [ -f "$NEW" ] && head -1 "$(dirname "$NEW")/exe-handler" | grep -q python3 || die "The download is not exe-handler; nothing changed."
+  ARGS=(); for a in "$@"; do [ "$a" = --update ] || [ "$a" = -u ] || ARGS+=("$a"); done
+  rc=0
+  if [ -t 0 ]; then bash "$NEW" --from-github "${ARGS[@]}" || rc=$?
+  elif { : </dev/tty; } 2>/dev/null; then bash "$NEW" --from-github "${ARGS[@]}" </dev/tty || rc=$?   # curl ... | bash: questions from the keyboard
+  else bash "$NEW" --from-github --yes "${ARGS[@]}" </dev/null || rc=$?; fi                           # no keyboard at all
+  rm -rf "$GH"; exit $rc
 fi
 
 # ---------- what machine is this ----------
@@ -124,6 +134,8 @@ pkg_try() {
   local p
   for p in "$@"; do
     if pkg_have "$p"; then echo "   =  $p (already installed)"
+    elif [ $PM = apt-get ] && [[ "$(apt-cache policy "$p" 2>/dev/null)" != *"Candidate: "[!\(]* ]]; then
+      continue                                  # not in this distro's sources (e.g. libasound2 on Ubuntu 24.04)
     elif [ $DRY = 1 ]; then echo "   [dry-run] install package $p"
     else busy "installing package $p" pkg_install "$p" || true
     fi
@@ -235,11 +247,11 @@ install_wine_arm64() {
   case $PM in
     apt-get) pkg_try libx11-6 libxext6 libxrender1 libxrandr2 libxi6 libxcursor1 libxcomposite1 libxinerama1 \
                      libxfixes3 libxxf86vm1 libfreetype6 libfontconfig1 libgl1 libegl1 libvulkan1 libasound2t64 libasound2 \
-                     libpulse0 libgnutls30t64 libgnutls30 libdbus-1-3 libudev1 libsdl2-2.0-0 cabextract ;;
-    *) pkg_try freetype fontconfig mesa-libGL alsa-lib pulseaudio-libs gnutls SDL2 cabextract ;;
+                     libpulse0 libgnutls30t64 libgnutls30 libdbus-1-3 libudev1 libusb-1.0-0 libsdl2-2.0-0 cabextract ;;
+    *) pkg_try freetype fontconfig mesa-libGL alsa-lib pulseaudio-libs gnutls libusb1 libusb SDL2 cabextract ;;
   esac
-  if [ -x "$OPT/wine/bin/wine" ]; then
-    echo "   Wine already in $OPT/wine"
+  if [ -x "$OPT/wine/bin/wine" ] && [ "$(version_of wine)" = "$WINE_ARM_VERSION" ]; then
+    echo "   =  Wine $WINE_ARM_VERSION already in $OPT/wine"
   else
     local url="https://github.com/Kron4ek/Wine-Builds/releases/download/$WINE_ARM_VERSION/wine-$WINE_ARM_VERSION-amd64-wow64.tar.xz"
     doing "downloading Wine $WINE_ARM_VERSION (about 190 MB): $url"
@@ -250,6 +262,7 @@ install_wine_arm64() {
     fi
     sudo_run mkdir -p "$OPT/wine"
     busy "unpacking Wine to $OPT/wine" $SUDO tar -xJf "$t/wine.tar.xz" -C "$OPT/wine" --strip-components=1
+    set_version wine "$WINE_ARM_VERSION"
     rm -rf "$t"
   fi
   doing "making wine, winecfg, regedit ... available as normal commands in /usr/local/bin"
@@ -260,7 +273,7 @@ install_wine_arm64() {
   done
   WINE_CMD="box64 $OPT/wine/bin/wine"
   # 16-bit Windows programs: Box64 cannot run 16-bit code, otvdm emulates it
-  if [ ! -f "$OPT/otvdm/otvdmw.exe" ]; then
+  if [ ! -f "$OPT/otvdm/otvdmw.exe" ] || [ "$(version_of otvdm)" != "$OTVDM_SHA256" ]; then
     doing "downloading otvdm for 16-bit Windows programs: $OTVDM_URL"
     local t; t=$(mktemp -d)
     run curl -fsSL -o "$t/otvdm.zip" "$OTVDM_URL"
@@ -270,6 +283,7 @@ install_wine_arm64() {
     run unzip -q "$t/otvdm.zip" -d "$t/x"
     sudo_run mkdir -p "$OPT/otvdm"
     run bash -c "$SUDO cp -r \"$t\"/x/*/. $OPT/otvdm/"
+    set_version otvdm "$OTVDM_SHA256"
     rm -rf "$t"
   fi
   OTVDM_DIR="$OPT/otvdm"
@@ -277,7 +291,7 @@ install_wine_arm64() {
 
 install_cnc_ddraw() {
   # old DirectDraw games: scaled window instead of a 320x200/640x480 mode switch (see cnc_ddraw in exe-handler)
-  [ -f "$OPT/cnc-ddraw/ddraw.dll" ] && { step "cnc-ddraw for old DirectDraw games"; echo "   =  already in $OPT/cnc-ddraw"; return; }
+  [ -f "$OPT/cnc-ddraw/ddraw.dll" ] && [ "$(version_of cnc-ddraw)" = "$CNC_VERSION" ] && { step "cnc-ddraw for old DirectDraw games"; echo "   =  already in $OPT/cnc-ddraw"; return; }
   step "cnc-ddraw $CNC_VERSION for old DirectDraw games"
   doing "downloading $CNC_URL and checking its sha256"
   local t; t=$(mktemp -d)
@@ -288,13 +302,23 @@ install_cnc_ddraw() {
   run unzip -q "$t/cnc.zip" ddraw.dll -d "$t/x"
   sudo_run mkdir -p "$OPT/cnc-ddraw"
   sudo_run install -m 644 "$t/x/ddraw.dll" "$OPT/cnc-ddraw/ddraw.dll"
+  set_version cnc-ddraw "$CNC_VERSION"
   rm -rf "$t"
 }
 
 install_dxvk() {
   # DXVK (Direct3D 8-11 via Vulkan), chosen automatically per game (see dxvk in exe-handler)
-  [ -f "$OPT/dxvk/x64/d3d11.dll" ] && { step "DXVK for Direct3D 11 games"; echo "   =  already in $OPT/dxvk"; return; }
-  step "DXVK $DXVK_VERSION for Direct3D games (chosen automatically)"
+  step "DXVK $DXVK_VERSION for Direct3D games (chosen automatically), and Vulkan"
+  # DXVK draws through Vulkan; vulkaninfo tells exe-handler whether the GPU can run it (else llvmpipe, Mesa's
+  # software Vulkan). 32-bit games under x86 Wine need the 32-bit Vulkan driver too.
+  case $PM in
+    apt-get) local v="vulkan-tools mesa-vulkan-drivers libvulkan1"
+             [ "$ARCH" = x86_64 ] && dpkg --print-foreign-architectures | grep -q i386 && v="$v mesa-vulkan-drivers:i386 libvulkan1:i386"
+             busy "Vulkan tools and drivers" pkg_try $v ;;
+    pacman)  busy "Vulkan tools and drivers" pkg_try vulkan-tools vulkan-icd-loader vulkan-swrast lib32-vulkan-icd-loader ;;
+    *)       busy "Vulkan tools and drivers" pkg_try vulkan-tools vulkan-loader mesa-vulkan-drivers libvulkan1 Mesa-vulkan-device-select ;;
+  esac
+  [ -f "$OPT/dxvk/x64/d3d11.dll" ] && [ "$(version_of dxvk)" = "$DXVK_VERSION" ] && { echo "   =  DXVK $DXVK_VERSION already in $OPT/dxvk"; return; }
   doing "downloading $DXVK_URL and checking its sha256"
   local t; t=$(mktemp -d)
   run curl -fsSL -o "$t/dxvk.tar.gz" "$DXVK_URL" || { warn "DXVK download failed, skipped"; return; }
@@ -305,6 +329,7 @@ install_dxvk() {
   sudo_run mkdir -p "$OPT/dxvk/x32" "$OPT/dxvk/x64"
   sudo_run install -m 644 "$t/dxvk-$DXVK_VERSION"/x32/*.dll "$OPT/dxvk/x32/"
   sudo_run install -m 644 "$t/dxvk-$DXVK_VERSION"/x64/*.dll "$OPT/dxvk/x64/"
+  set_version dxvk "$DXVK_VERSION"
   rm -rf "$t"
 }
 
