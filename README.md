@@ -172,6 +172,9 @@ weg. Wine, DOSBox-X, Box64 en `~/.wine` blijven staan.
   Basic met de runtime één map hoger (WinPac), 32-bit Visual Basic (Poker Broker), DirectDraw (Jazz Jackrabbit 2),
   de melding bij een ontbrekende DLL (Vortex zonder MFC30.DLL), Direct3D 9 (Cossacks) en 64-bit Direct3D 11 met
   DXVK (Guinea Pig Boulder Garden). Een tweede `install.sh` duurt 7 seconden en slaat alles over.
+- **x86-64 Ubuntu 24.04 in een container** (via qemu-emulatie op de Pi): de installatie (Wine 9.0, cnc-ddraw,
+  DXVK, Vulkan) slaagt; DOS, `.bat`, 16-bit (Stars!), Visual Basic (Poker Broker) en de melding bij een ontbrekende
+  DLL werken. Zwaardere spellen lopen onder qemu vast op de beperkte adresruimte van de Pi en zijn daar niet te testen.
 - **Raspberry Pi 5** (Raspberry Pi OS / Debian 13) als bureaublad: daarnaast Red Alert 2 (DDrawCompat, eigen
   bureaublad van 1024x768) tot en met een gespeelde skirmish.
 - **Zorin OS 18** (x86-64) met Wine 10 en drie monitoren: DOS-spellen vanaf een netwerkshare (Aladdin), 16-bit
