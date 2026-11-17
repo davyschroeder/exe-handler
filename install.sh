@@ -292,9 +292,9 @@ install_cnc_ddraw() {
 }
 
 install_dxvk() {
-  # DXVK (Direct3D 8-11 via Vulkan), only used for programs named in ~/.config/exe-handler/dxvk.conf (see dxvk in exe-handler)
+  # DXVK (Direct3D 8-11 via Vulkan), chosen automatically per game (see dxvk in exe-handler)
   [ -f "$OPT/dxvk/x64/d3d11.dll" ] && { step "DXVK for Direct3D 11 games"; echo "   =  already in $OPT/dxvk"; return; }
-  step "DXVK $DXVK_VERSION for Direct3D 11 games (only for programs in dxvk.conf)"
+  step "DXVK $DXVK_VERSION for Direct3D games (chosen automatically)"
   doing "downloading $DXVK_URL and checking its sha256"
   local t; t=$(mktemp -d)
   run curl -fsSL -o "$t/dxvk.tar.gz" "$DXVK_URL" || { warn "DXVK download failed, skipped"; return; }
@@ -433,7 +433,7 @@ printf '\n\033[1;32mDone in %s.\033[0m\n' "$(elapsed)"
 echo "   DOS programs:      ${DOSBOX_CMD:-not available}"
 echo "   Windows programs:  ${WINE_CMD:-not available}$(command -v ${WINE_CMD%% *} >/dev/null 2>&1 && [ "$ARCH" != aarch64 ] && echo "  ($(wine --version 2>/dev/null))")"
 [ -f "$OPT/cnc-ddraw/ddraw.dll" ] && echo "   Old DirectDraw:    cnc-ddraw in $OPT/cnc-ddraw"
-[ -f "$OPT/dxvk/x64/d3d11.dll" ] && echo "   Direct3D 11:       DXVK in $OPT/dxvk (for programs in ~/.config/exe-handler/dxvk.conf)"
+[ -f "$OPT/dxvk/x64/d3d11.dll" ] && echo "   Direct3D:          DXVK in $OPT/dxvk (chosen automatically per game)"
 echo "   Details of this run: $ILOG"
 if [ "${TIP_WARMUP:-0}" = 1 ]; then
   echo "   Tip: this computer has $MONITORS monitors. The first Windows program after login can make the desktop"
