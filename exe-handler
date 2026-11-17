@@ -927,7 +927,9 @@ def direct3d_version(path):
     files = [path] + [os.path.join(d, n) for n in os.listdir(d) if n.lower() == "unityplayer.dll"]
     for imp in pe_imports(path):
         f = os.path.join(d, imp)
-        if imp[:-4] not in DXVK_DLLS and os.path.isfile(f) and f not in files:
+        # a ddraw.dll next to the game is a wrapper like cnc-ddraw: it names d3d9.dll for its own renderer, the
+        # game itself stays a DirectDraw game (Red Alert 2 got DXVK and lost cnc-ddraw's scaling)
+        if imp[:-4] not in DXVK_DLLS and imp != "ddraw.dll" and os.path.isfile(f) and f not in files:
             files.append(f)
     found = set()
     for f in files:
