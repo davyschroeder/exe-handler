@@ -53,7 +53,7 @@ Box64). Box64 komt uit de apt-bron van Pi-Apps-Coders; op andere distributies wo
    - ARM64: Box64, Wine 11.4 in `/opt/exe-handler/wine` (download gecontroleerd met sha256), de ARM-bibliotheken
      die Wine nodig heeft, en `wine`/`winecfg`/... als gewone opdrachten. Plus otvdm voor 16-bit programma's.
    - Raspberry Pi 5 met 16K-geheugenpagina's: biedt aan om `kernel=kernel8.img` in te stellen (Wine heeft 4K nodig).
-4. **cnc-ddraw** (alleen x86) in `/opt/exe-handler/cnc-ddraw`, voor oude DirectDraw-spellen (download gecontroleerd
+4. **cnc-ddraw** (x86 en ARM64) in `/opt/exe-handler/cnc-ddraw`, voor oude DirectDraw-spellen (download gecontroleerd
    met sha256).
 5. **DXVK** 3.1.1 in `/opt/exe-handler/dxvk` (x86 en ARM64, download gecontroleerd met sha256), automatisch
    gebruikt voor Direct3D-spellen (zie hieronder).
@@ -74,11 +74,14 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
   werken. In volledig scherm wordt de muis niet vastgehouden, dus **Alt+Tab** werkt.
 - **Windows-versie**: programma's gebouwd voor Windows 95 t/m XP krijgen automatisch "XP" (minder installatiefouten).
 - **Oude DirectDraw-spellen** (Windows 95-XP, bijvoorbeeld Jazz Jackrabbit 2) vragen het scherm om 320x200 of
-  640x480 in 256 kleuren; moderne schermen weigeren dat ("Could not set video mode"). Op x86 zet exe-handler
+  640x480 in 256 kleuren; moderne schermen weigeren dat ("Could not set video mode"). exe-handler zet
   eenmalig [cnc-ddraw](https://github.com/FunkyFr3sh/cnc-ddraw) (`ddraw.dll` + `ddraw.ini`) naast het spel: het
   spel draait dan in een gewoon venster dat je kunt vergroten en maximaliseren, het beeld schaalt mee. Gebruik de
   maximaliseerknop voor een groot beeld; de eigen volledig-scherm-toets van het spel (Alt+Enter) werkt dan niet.
   Uitzetten per spel: maak een leeg bestand `exe-handler.no-ddraw` naast de .exe en verwijder `ddraw.dll`/`ddraw.ini`.
+  Ook op ARM64: cnc-ddraw is x86-Windows-code net als het spel en draait onder Box64. Een starter die zelf niet
+  tekent (Red Alert 2: `Ra2.exe` start `game.exe`) krijgt het ook, als er een oud DirectDraw-spel naast staat. Staat
+  er al een cnc-ddraw naast het spel (bijvoorbeeld zelf geplaatst), dan zorgt exe-handler dat Wine die laadt.
 - **Ontbrekende DLL**: stopt een programma meteen, dan kijkt exe-handler welke DLL's het nodig heeft die niet naast
   het programma, niet in de Wine-map en niet in Wine zelf zitten, en noemt die bij naam (bijvoorbeeld *"CNCS32.DLL
   ontbreekt"*). Oude programma's rekenden vaak op een DLL die Windows 95/98 of een ander programma al had
@@ -106,9 +109,18 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
 - **Visual Basic-runtime één map hoger** (zoals op shareware-cd's, `VBRUN300.DLL` naast de spelmappen) wordt gevonden.
   Voor 16-bit programma's zet exe-handler die runtime eenmalig in `C:\windows\system` van Wine (zoals Windows 3.1
   dat deed); bestaande bestanden worden niet overschreven.
+- **Gedeelde DLL's van Windows 3.1** (`BWCC.DLL`, `CTL3DV2.DLL`, VBX-besturingselementen): een 16-bit programma dat
+  er een noemt die niet naast het programma, niet in Wine en niet in otvdm zit, krijgt die uit de map erboven of
+  een map ernaast (op shareware-cd's zit `BWCC.DLL` bij één spel en missen de andere hem), eenmalig in
+  `C:\windows\system`. Voorbeeld: Flip'em vindt `BWCC.DLL` bij 8-Ball Pool.
+- **Programma in een Wine-map**: staat een programma in `.../drive_c/...` van een Wine-map (geïnstalleerd met een
+  installer), dan draait het in die Wine-map, met de DLL's en registerinstellingen die de installer daar zette.
+- **Crash bij de start onder Box64**: wordt Wine binnen 30 seconden door een crash-signaal gestopt (gezien bij de
+  eerste start van een Unity-spel), dan start exe-handler het één keer opnieuw.
 - **DDrawCompat**: heruitgaven van oude spellen (bijvoorbeeld Red Alert 2) brengen een eigen `ddraw.dll` mee, een
-  hulpmiddel voor Windows 10/11 dat in Wine meteen crasht. exe-handler herkent die en gebruikt dan Wine's eigen
-  DirectDraw; het bestand blijft staan.
+  hulpmiddel voor Windows 10/11 dat in Wine meteen crasht. exe-handler herkent die, hernoemt hem naar
+  `ddraw.dll.DDrawCompat` (terugzetten = terug hernoemen) en gebruikt cnc-ddraw; zonder cnc-ddraw Wine's eigen
+  DirectDraw.
 - **Haperen bij het starten**: start Wine vanaf nul, dan leest het een tiental keer alle monitoren opnieuw uit; bij
   meerdere schermen staat het bureaublad daarbij telkens even stil (gemeten op drie schermen: 12 keer, samen
   2 seconden). exe-handler laat de Wine-server daarom aanstaan na het eerste Windows-programma: alleen dat eerste
@@ -143,7 +155,7 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
 | `exe-handler.start` | naast de .exe | regels `Game.exe = Loader.exe [opties]`: start de loader (met opties) als je Game.exe opent; `{screen}` wordt de resolutie van je hoofdscherm, bv. `StarTopia.exe = StarTopia.exe /r{screen}x32` |
 | `exe-handler.reg` | naast de .exe | registerbestand dat vóór elke start wordt ingelezen |
 | `exe-handler.no-ddraw` | naast de .exe | leeg bestand: geen cnc-ddraw voor dit spel |
-| `virtual-desktop.conf` | `~/.config/exe-handler/` | `spel.exe 1024x768`: in een eigen Wine-bureaublad van precies die grootte. Handig voor spellen die van resolutie wisselen: zonder schalen klopt de muis (bv. Red Alert 2: `Ra2.exe 1024x768`, en in `RA2.INI` dezelfde resolutie) |
+| `virtual-desktop.conf` | `~/.config/exe-handler/` | `spel.exe 1024x768`: in een eigen Wine-bureaublad van precies die grootte. Alleen nodig als een spel het zonder niet doet; zonder schalen klopt de muis (Red Alert 2 heeft het niet meer nodig: dat gaat via cnc-ddraw) |
 | `exe-handler.no-dxvk` | naast de .exe | leeg bestand: nooit DXVK voor dit spel |
 | `dxvk.conf` | `~/.config/exe-handler/` | `spel.exe` per regel: altijd DXVK, ook voor Direct3D 8/9 op een GPU die het niet aankan |
 | `no-dxvk.conf` | `~/.config/exe-handler/` | `spel.exe` per regel: nooit DXVK, Wine's eigen Direct3D |
@@ -175,14 +187,17 @@ weg. Wine, DOSBox-X, Box64 en `~/.wine` blijven staan.
 - **x86-64 Ubuntu 24.04 in een container** (via qemu-emulatie op de Pi): de installatie (Wine 9.0, cnc-ddraw,
   DXVK, Vulkan) slaagt; DOS, `.bat`, 16-bit (Stars!), Visual Basic (Poker Broker) en de melding bij een ontbrekende
   DLL werken. Zwaardere spellen lopen onder qemu vast op de beperkte adresruimte van de Pi en zijn daar niet te testen.
-- **Raspberry Pi 5** (Raspberry Pi OS / Debian 13) als bureaublad: daarnaast Red Alert 2 (DDrawCompat, eigen
-  bureaublad van 1024x768) tot en met een gespeelde skirmish.
+- **Raspberry Pi 5** (Raspberry Pi OS / Debian 13, labwc/Wayland) als bureaublad, met een lege thuismap (geen eigen
+  instellingen, nieuwe Wine-map): 46 programma's, waaronder 20 Windows 3.1-spellen en installers van een
+  shareware-cd (Flip'em via de gedeelde BWCC.DLL), Red Alert 2 en Yuri's Revenge (cnc-ddraw in plaats van
+  DDrawCompat, muis klopt), Cossacks, Diablo II (1.10 met PlugY en 1.14d), StarTopia, Guinea Pig Boulder Garden
+  (DXVK), Vortex (in een Wine-map geïnstalleerd), kaartspellen en de Phantasmagoria-installer. Eerder ook Red Alert 2
+  tot en met een gespeelde skirmish.
 - **Zorin OS 18** (x86-64) met Wine 10 en drie monitoren: DOS-spellen vanaf een netwerkshare (Aladdin), 16-bit
   Windows (Jixxa, Tinyjong, WinPac), Visual Basic (Poker Broker), DirectDraw (Jazz Jackrabbit 2), starten zonder
   haperen.
 
-Bekende beperkingen: niet elk Windows-programma draait in Wine. cnc-ddraw is alleen op x86 getest en staat op
-ARM uit. Het passend maken van vensters werkt op X11 (ook via XWayland), niet voor Wine's eigen Wayland-vensters.
+Bekende beperkingen: niet elk Windows-programma draait in Wine. Het passend maken van vensters werkt op X11 (ook via XWayland), niet voor Wine's eigen Wayland-vensters.
 
 ## English summary
 
@@ -193,11 +208,13 @@ ARM uit. Het passend maken van vensters werkt op X11 (ook via XWayland), niet vo
 - **Integration**: file associations, right-click "Open in DOSBox / Wine", a binfmt_misc rule for executable
   `.exe` files, the Wine folder prepared in advance.
 - **Windows programs**: normal window decorations and Alt+Tab; old DirectDraw games in a scaled, resizable window
-  through cnc-ddraw (x86) instead of a 320x200/640x480 mode switch; old Visual Basic programs in a fitted virtual
+  through cnc-ddraw (x86 and ARM64, also for launchers such as Red Alert 2's, replacing a crashing DDrawCompat) instead of a 320x200/640x480 mode switch; old Visual Basic programs in a fitted virtual
   desktop window (they overflow on screens wider than 2184 pixels); the wineserver stays on so that only the first
   program of a session can stutter on multi-monitor desktops (`--warmup-at-login` moves that to the login).
 - **Missing DLLs**: when a program stops right away, exe-handler names the DLLs it imports that are neither next
   to it, nor in the Wine folder, nor built into Wine (e.g. MFC30.DLL, CNCS32.DLL from the Windows 95/98 era).
+  16-bit programs get shared Windows 3.1 DLLs/VBX controls (BWCC.DLL, ...) from neighbouring folders; a program
+  installed inside a Wine folder runs in that Wine folder; a Box64 crash right at the start is retried once.
 - **Direct3D games**: DXVK (Vulkan) is chosen automatically from what the .exe and its own DLLs (UnityPlayer.dll)
   use: always for Direct3D 10/11, for Direct3D 8/9 only when the GPU runs DXVK. On GPUs without
   `multiDrawIndirect` (Raspberry Pi 5) it falls back to llvmpipe, Mesa's software Vulkan (slow). Override per game

@@ -211,6 +211,23 @@ def env_wine():
     return e
 
 
+def own_prefix(path):
+    """A program installed inside a Wine folder (.../drive_c/...) runs in that Wine folder: its installer put the
+    DLLs and registry entries it needs there (e.g. MFC30.DLL in windows/system). Only a Wine folder you may write
+    to; WINEPREFIX set by the caller always wins."""
+    if "WINEPREFIX" in os.environ:
+        return
+    parts = path.split(os.sep)
+    for i in range(len(parts) - 1, 0, -1):
+        if parts[i].lower() == "drive_c":
+            pfx = os.sep.join(parts[:i])
+            if os.path.isfile(os.path.join(pfx, "system.reg")) and os.access(pfx, os.W_OK):
+                if os.path.realpath(pfx) != os.path.realpath(f"{HOME}/.wine"):
+                    log(f"program lives in Wine folder {pfx}: using that one")
+                os.environ["WINEPREFIX"] = pfx
+            return
+
+
 def wine(*args, e=None, timeout=300):
     return subprocess.run(WINE + list(args), env=e or env_wine(), stdout=subprocess.DEVNULL,
                           stderr=subprocess.DEVNULL, timeout=timeout)
@@ -330,7 +347,7 @@ def prefix_ready(e):
         return True
     log(f"creating Wine prefix {e['WINEPREFIX']}")
     if has_display():
-        subprocess.Popen(["zenity", "--info", "--no-wrap", "--timeout=20", "--title=EXE",
+        subprocess.Popen(["zenity", "--info", "--no-wrap", "--timeout=20", "--title=exe-handler",
                           "--text=" + T("Preparing Wine (first start only, takes a minute)...",
                                         "Wine wordt klaargezet (alleen de eerste keer, duurt een minuut)...")],
                          stderr=subprocess.DEVNULL) if shutil.which("zenity") else None
@@ -487,6 +504,67 @@ def win16_runtimes(folder, e):
                 log(f"Visual Basic runtime {n} from {folder} copied to C:\\windows\\system (16-bit program)")
     except OSError as err:
         log(f"could not copy the Visual Basic runtime from {folder} ({err})")
+
+
+def ne_imports(path):
+    """Module names a 16-bit (NE) program links to, plus DLL/VBX file names written in it (loaded at run time,
+    e.g. Visual Basic controls such as THREED.VBX). Lower case, with extension: ['bwcc.dll', 'threed.vbx']."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(4 * 1024 * 1024)
+        ne = struct.unpack_from("<I", data, 0x3C)[0]
+        if data[ne:ne + 2] != b"NE":
+            return []
+        count, modtab, names = struct.unpack_from("<H", data, ne + 0x1E)[0], *struct.unpack_from("<HH", data, ne + 0x28)
+        out = []
+        for i in range(count):
+            off = ne + names + struct.unpack_from("<H", data, ne + modtab + 2 * i)[0]
+            out.append(data[off + 1:off + 1 + data[off]].decode("latin-1").lower() + ".dll")
+    except (OSError, struct.error, IndexError):
+        return []
+    out += [m.decode("latin-1").lower() for m in re.findall(rb"(?i)\b[a-z0-9_$~-]{1,8}\.(?:dll|vbx)\b", data)]
+    return list(dict.fromkeys(out))
+
+
+def win16_shared(path, e):
+    """Windows 3.1 programs counted on shared DLLs and Visual Basic controls (BWCC.DLL, CTL3DV2.DLL, VBRUN300.DLL,
+    THREED.VBX) being in C:\\WINDOWS\\SYSTEM, put there by whatever was installed before. On shareware CDs they
+    come with one game and are missing next to the others. When the program needs one that is not next to it, not
+    in the Wine folder and not built into Wine/otvdm, look in the folder above and in the folders next to the
+    program's folder, and copy it (once, never overwriting) to C:\\windows\\system, as Windows 3.1 had it."""
+    sysdir = os.path.join(e["WINEPREFIX"], "drive_c", "windows", "system")
+    here = os.path.dirname(path)
+    up = os.path.dirname(here)
+
+    def names(d):
+        try:
+            return {n.lower(): n for n in os.listdir(d)}
+        except OSError:
+            return {}
+    have = set(names(here)) | set(names(sysdir)) | set(names(os.path.join(e["WINEPREFIX"], "drive_c", "windows")))
+    provided = set()
+    for d in wine_builtin_dirs(False) + ([os.path.join(OTVDM, "dll")] if OTVDM else []):
+        provided |= {n.lower()[:-2] for n in names(d) if n.lower().endswith(("16", ".dll"))}
+        provided |= {n.lower() for n in names(d)}
+    wanted = [n for n in ne_imports(path) if n not in have and n not in provided and n[:-4] + ".dll16" not in provided
+              and n[:-4] not in ("kernel", "user", "gdi", "krnl386", "system", "keyboard", "sound", "toolhelp")]
+    if not wanted:
+        return
+    places = [up] + sorted(os.path.join(up, d) for d in names(up).values() if os.path.isdir(os.path.join(up, d))
+                           and os.path.join(up, d) != here)
+    for n in wanted:
+        for d in places:
+            src = names(d).get(n)
+            if src:
+                try:
+                    os.makedirs(sysdir, exist_ok=True)
+                    shutil.copy2(os.path.join(d, src), os.path.join(sysdir, src.upper()))
+                    log(f"16-bit program needs {n.upper()}: copied from {d} to C:\\windows\\system")
+                except OSError as err:
+                    log(f"could not copy {n.upper()} from {d} ({err})")
+                break
+        else:
+            log(f"16-bit program names {n.upper()}, which is nowhere near it (it may not need it)")
 
 
 def screen_size():
@@ -723,9 +801,25 @@ def old_directdraw(path):
     return not any(m in data for m in (b"d3dx", b"d3dim", b"direct3d device", b"iid_idirect3d", b"d3dxerr"))
 
 
-def ddraw_compat(path, e):
+def launcher_of_directdraw(path):
+    """A launcher or menu (Ra2.exe starts game.exe) that does not draw with DirectDraw itself, next to an old
+    DirectDraw game: settings for the game's drawing must already be in place when the launcher starts it."""
+    try:
+        with open(path, "rb") as f:
+            if b"ddraw.dll" in f.read(8 * 1024 * 1024).lower():
+                return False
+        d = os.path.dirname(path)
+        return any(old_directdraw(os.path.join(d, n)) for n in os.listdir(d)
+                   if n.lower().endswith(".exe") and n.lower() != os.path.basename(path).lower())
+    except OSError:
+        return False
+
+
+def ddraw_compat(path, e, cnc=True):
     """Re-releases of old games (Red Alert 2, ...) ship DDrawCompat as ddraw.dll: a fix for Windows 10/11 that
-    crashes under Wine (access violation in ddraw.dll, the game stops at once). Use Wine's own DirectDraw then."""
+    crashes under Wine (access violation in ddraw.dll, the game stops at once). When cnc-ddraw can take over (see
+    cnc_ddraw), DDrawCompat is renamed to ddraw.dll.DDrawCompat (kept, rename it back to undo); otherwise Wine's
+    own DirectDraw is used for this run."""
     dll = next_to(path, "ddraw.dll", "DDRAW.dll", "DDRAW.DLL")
     if not dll:
         return e
@@ -735,6 +829,15 @@ def ddraw_compat(path, e):
                 return e
     except OSError:
         return e
+    keep = os.path.join(os.path.dirname(dll), "ddraw.dll.DDrawCompat")
+    if cnc and os.path.exists(os.path.join(CNC_DDRAW, "ddraw.dll")) and not next_to(path, "exe-handler.no-ddraw") \
+            and (old_directdraw(path) or launcher_of_directdraw(path)) and not os.path.exists(keep):
+        try:
+            os.rename(dll, keep)
+            log(f"ddraw.dll next to the program is DDrawCompat (crashes in Wine): renamed to {keep}, cnc-ddraw instead")
+            return e
+        except OSError as err:
+            log(f"DDrawCompat could not be renamed ({err})")
     log("ddraw.dll next to the program is DDrawCompat (crashes in Wine): Wine's own DirectDraw is used instead")
     e = dict(e)
     e["WINEDLLOVERRIDES"] = "ddraw=b" + (";" + e["WINEDLLOVERRIDES"] if e.get("WINEDLLOVERRIDES") else "")
@@ -744,11 +847,13 @@ def ddraw_compat(path, e):
 def cnc_ddraw(path, e):
     """Old DirectDraw games ask the monitor for 320x200 or 640x480 in 256 colours. Today's screens refuse ('Could
     not set video mode'), or the whole desktop is rearranged. Put cnc-ddraw next to the game (once) and let Wine
-    use it for this run: the game then lives in a scaled, resizable window. x86 only (not tested under Box64)."""
+    use it for this run: the game then lives in a scaled, resizable window. Also on ARM: cnc-ddraw is x86
+    Windows code like the game itself and runs under Box64 (Red Alert 2 tested on a Raspberry Pi 5)."""
     d = os.path.dirname(path)
     dll, ini = os.path.join(d, "ddraw.dll"), os.path.join(d, "ddraw.ini")
     src = os.path.join(CNC_DDRAW, "ddraw.dll")
-    if not IS_X86 or not os.path.exists(src) or next_to(path, "exe-handler.no-ddraw") or not old_directdraw(path):
+    if not os.path.exists(src) or next_to(path, "exe-handler.no-ddraw") or \
+            not (old_directdraw(path) or launcher_of_directdraw(path)):
         return e
     ours = False
     try:
@@ -756,7 +861,20 @@ def cnc_ddraw(path, e):
     except OSError:
         pass
     if os.path.exists(dll) and not ours:
-        return e                                  # the game brings its own ddraw.dll (or the user placed one)
+        # the game brings its own ddraw.dll (or the user placed one): leave it alone, but when it is cnc-ddraw make
+        # sure Wine loads it (Wine prefers its own ddraw.dll over one next to the program)
+        try:
+            with open(dll, "rb") as f:
+                data = f.read()
+            theirs_cnc = b"cnc_ddraw_config_init" in data or b"cnc-ddraw" in data
+        except OSError:
+            theirs_cnc = False
+        if not theirs_cnc:
+            return e
+        log("cnc-ddraw that was already next to the game is used")
+        e = dict(e)
+        e["WINEDLLOVERRIDES"] = "ddraw=n,b" + (";" + e["WINEDLLOVERRIDES"] if e.get("WINEDLLOVERRIDES") else "")
+        return e
     if not ours:
         try:
             shutil.copyfile(src, dll)
@@ -915,8 +1033,10 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
         wine("regedit", "/S", "Z:" + reg.replace("/", "\\"), e=e)
         log(f"registry imported: {reg}")
     extra = runtime_in_parent(path) if is_visual_basic(path) else None
-    if extra and kind(path)[0] == "win16":
-        win16_runtimes(extra, e)
+    if kind(path)[0] == "win16":
+        if extra:
+            win16_runtimes(extra, e)
+        win16_shared(path, e)
     elif extra:
         e = dict(e)
         e["WINEPATH"] = extra + (";" + e["WINEPATH"] if e.get("WINEPATH") else "")
@@ -924,7 +1044,7 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
     chosen = None if (prefix or msi) else virtual_desktop(path)     # from virtual-desktop.conf: keep that size
     size = chosen or (None if (prefix or msi) else auto_desktop(path))
     if not (prefix or msi):
-        e = ddraw_compat(path, e)
+        e = ddraw_compat(path, e, cnc=not size)
     if not (size or prefix or msi):
         e = cnc_ddraw(path, e)
     if not (prefix or msi):
@@ -954,6 +1074,12 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
     try:
         with open(LOG, "a") as lf:
             rc = subprocess.run(cmd, cwd=cwd, env=e, stdout=lf, stderr=lf).returncode
+            if rc is not None and -rc in (4, 6, 7, 11) and time.time() - start < 30:
+                # killed by a signal right after the start: on ARM mostly Box64 tripping over a first start
+                # (Unity games); a second start nearly always works
+                log(f"wine was killed by signal {-rc} after {time.time() - start:.0f}s: starting once more")
+                start = time.time()
+                rc = subprocess.run(cmd, cwd=cwd, env=e, stdout=lf, stderr=lf).returncode
     finally:
         restore_monitors(before)
     log(f"wine finished rc={rc} after {time.time() - start:.0f}s")
@@ -1280,6 +1406,7 @@ def main():
         return 1
     k, console = kind(path)
     log(f"start {path} type={k} console={console} choice={force or 'auto'}")
+    own_prefix(path)
     if force == "dos" or (not force and k in ("dos", "bat")):
         return run_dos(path, args)
     if not force and k == "win16":

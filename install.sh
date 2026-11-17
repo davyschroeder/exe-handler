@@ -144,7 +144,6 @@ pkg_try() {
   done
 }
 
-[ "$ARCH" = aarch64 ] && TOTAL=8      # no cnc-ddraw on ARM
 [ $BINFMT = 1 ] || TOTAL=$((TOTAL - 1))
 echo "   Everything that runs quietly is written to $ILOG"
 if [ -n "$SUDO" ] && [ $DRY = 0 ]; then
@@ -353,6 +352,7 @@ case $ARCH in
   *) warn "Windows programs are not supported on $ARCH (only x86 and ARM64). DOS programs will work." ;;
 esac
 case $ARCH in x86_64|i686|aarch64) install_dxvk ;; esac
+[ "$ARCH" = aarch64 ] && install_cnc_ddraw      # x86 Windows code like the games; runs under Box64 too
 [ -n "$WINE_CMD" ] && ok "Windows programs will use: $WINE_CMD" || warn "no Wine available"
 
 # ---------- the handler itself ----------
