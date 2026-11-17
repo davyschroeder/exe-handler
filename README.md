@@ -53,8 +53,8 @@ Box64). Box64 komt uit de apt-bron van Pi-Apps-Coders; op andere distributies wo
    - Raspberry Pi 5 met 16K-geheugenpagina's: biedt aan om `kernel=kernel8.img` in te stellen (Wine heeft 4K nodig).
 4. **cnc-ddraw** (alleen x86) in `/opt/exe-handler/cnc-ddraw`, voor oude DirectDraw-spellen (download gecontroleerd
    met sha256).
-5. **DXVK** 3.1.1 in `/opt/exe-handler/dxvk` (x86 en ARM64, download gecontroleerd met sha256), alleen gebruikt
-   voor programma's die je in `dxvk.conf` zet (zie hieronder).
+5. **DXVK** 3.1.1 in `/opt/exe-handler/dxvk` (x86 en ARM64, download gecontroleerd met sha256), automatisch
+   gebruikt voor Direct3D-spellen (zie hieronder).
 6. **`/usr/local/bin/exe-handler`** (dit programma) en `/etc/exe-handler.conf` (welke Wine/DOSBox gebruikt wordt).
 7. **Dubbelklikken**: een `.desktop`-bestand voor alle exe-bestandstypen, standaard gemaakt voor jouw gebruiker
    (gaat ook boven Wine's eigen loader of Zorin's "Windows App Support"-melding). Rechtsklik heeft
@@ -82,12 +82,17 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
   ontbreekt"*). Oude programma's rekenden vaak op een DLL die Windows 95/98 of een ander programma al had
   geplaatst (MFC30.DLL, CNCS32.DLL); zet dat bestand naast de .exe of in `~/.wine/drive_c/windows/syswow64`
   (32-bit) of `system32` (64-bit).
-- **Direct3D 11-spellen** (bijvoorbeeld Unity-spellen, foutmelding *"failed to create device"*): zet de naam van de
-  .exe in `~/.config/exe-handler/dxvk.conf`. exe-handler zet dan eenmalig de DLL's van
-  [DXVK](https://github.com/doitsujin/dxvk) naast het spel (lijstje in `exe-handler.dxvk`) en laat Wine die voor dit
-  spel gebruiken. Heeft de grafische kaart een functie niet die DXVK nodig heeft (de Raspberry Pi 5 mist
-  `multiDrawIndirect`), dan gebruikt DXVK Mesa's software-Vulkan (llvmpipe): het spel start, maar traag. Terug:
-  naam uit `dxvk.conf` halen en de DLL's uit `exe-handler.dxvk` plus dat bestand verwijderen.
+- **Direct3D-spellen** krijgen vanzelf [DXVK](https://github.com/doitsujin/dxvk) (Direct3D via Vulkan) als dat
+  beter werkt dan Wine's eigen Direct3D. exe-handler kijkt in de .exe en in de DLL's die het spel uit zijn eigen map
+  laadt (Unity-spellen hebben hun Direct3D in `UnityPlayer.dll`):
+  - **Direct3D 10/11** (Unity-spellen, foutmelding *"failed to create device"*): altijd DXVK. Heeft de grafische
+    kaart een functie niet die DXVK nodig heeft (de Raspberry Pi 5 mist `multiDrawIndirect`), dan gebruikt DXVK
+    Mesa's software-Vulkan (llvmpipe): het spel start, maar traag.
+  - **Direct3D 8/9**: DXVK alleen als de grafische kaart het aankan; anders is Wine's eigen Direct3D sneller.
+
+  exe-handler zet de DLL's eenmalig naast het spel (lijstje in `exe-handler.dxvk`). Zelf kiezen: zet de .exe in
+  `dxvk.conf` (altijd DXVK) of `no-dxvk.conf` (nooit), of maak een leeg bestand `exe-handler.no-dxvk` naast de .exe.
+  `exe-handler --check spel.exe` laat zien wat exe-handler kiest.
 - **Andere programma's die de schermresolutie wisselen**: Wine 10 en nieuwer bootst die wissel na
   (`EmulateModeset`), je echte monitor en de indeling van meerdere schermen blijven zoals ze zijn. Als vangnet zet
   exe-handler na afloop de monitoren terug als een programma ze toch heeft veranderd (bijvoorbeeld na een crash).
@@ -131,7 +136,9 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
 | `exe-handler.reg` | naast de .exe | registerbestand dat vóór elke start wordt ingelezen |
 | `exe-handler.no-ddraw` | naast de .exe | leeg bestand: geen cnc-ddraw voor dit spel |
 | `virtual-desktop.conf` | `~/.config/exe-handler/` | `spel.exe 1024x768`: in een eigen Wine-bureaublad van die grootte |
-| `dxvk.conf` | `~/.config/exe-handler/` | `spel.exe` per regel: Direct3D 8-11 via DXVK (Vulkan) in plaats van Wine's eigen Direct3D |
+| `exe-handler.no-dxvk` | naast de .exe | leeg bestand: nooit DXVK voor dit spel |
+| `dxvk.conf` | `~/.config/exe-handler/` | `spel.exe` per regel: altijd DXVK, ook voor Direct3D 8/9 op een GPU die het niet aankan |
+| `no-dxvk.conf` | `~/.config/exe-handler/` | `spel.exe` per regel: nooit DXVK, Wine's eigen Direct3D |
 | `x11.conf` | `~/.config/exe-handler/` | `spel.exe` per regel: op een Wayland-bureaublad toch Wine's X11-weergave gebruiken (muis in sommige spellen) |
 | `dos.conf` | `~/.config/exe-handler/` | DOSBox-X-instellingen |
 
@@ -175,8 +182,10 @@ ARM uit. Het passend maken van vensters werkt op X11 (ook via XWayland), niet vo
   program of a session can stutter on multi-monitor desktops (`--warmup-at-login` moves that to the login).
 - **Missing DLLs**: when a program stops right away, exe-handler names the DLLs it imports that are neither next
   to it, nor in the Wine folder, nor built into Wine (e.g. MFC30.DLL, CNCS32.DLL from the Windows 95/98 era).
-- **Direct3D 11 games**: list the .exe in `~/.config/exe-handler/dxvk.conf` to use DXVK (Vulkan) for that game only;
-  on GPUs without `multiDrawIndirect` (Raspberry Pi 5) it falls back to llvmpipe, Mesa's software Vulkan (slow).
+- **Direct3D games**: DXVK (Vulkan) is chosen automatically from what the .exe and its own DLLs (UnityPlayer.dll)
+  use: always for Direct3D 10/11, for Direct3D 8/9 only when the GPU runs DXVK. On GPUs without
+  `multiDrawIndirect` (Raspberry Pi 5) it falls back to llvmpipe, Mesa's software Vulkan (slow). Override per game
+  with `dxvk.conf`, `no-dxvk.conf` or an `exe-handler.no-dxvk` file.
 - **DOS programs**: resizable window, F12+F fullscreen, mouse caught on click (Ctrl+F10 releases), speed chosen
   from the program's date, a sound font for General MIDI, folders on network shares mounted through a symlink.
 

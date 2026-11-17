@@ -744,31 +744,61 @@ DXVK_DLLS = ("d3d8", "d3d9", "d3d10core", "d3d11", "dxgi")
 DXVK_MARK = "exe-handler.dxvk"
 
 
-def gpu_lacks_dxvk():
-    """True when Vulkan shows real GPUs but none has multiDrawIndirect, a feature DXVK requires (the Raspberry Pi
-    5's V3D lacks it). DXVK then only works on llvmpipe, Mesa's software Vulkan: slow, but it starts."""
+_VULKAN = []
+
+
+def vulkan_for_dxvk():
+    """'gpu' when a real GPU can run DXVK, 'llvmpipe' when only Mesa's software Vulkan can (the Raspberry Pi 5's
+    V3D lacks multiDrawIndirect, a feature DXVK requires), None when there is no Vulkan at all."""
+    if _VULKAN:
+        return _VULKAN[0]
     try:
         out = subprocess.run(["vulkaninfo"], capture_output=True, text=True, timeout=20).stdout
     except (OSError, subprocess.SubprocessError):
-        return False
+        out = ""
     gpus = re.split(r"\nGPU\d+:\n", out)[1:]
     real = [g for g in gpus if "PHYSICAL_DEVICE_TYPE_CPU" not in g]
-    if not real:
-        return False
-    return all(re.search(r"multiDrawIndirect\s*=\s*(false|0)\b", g) for g in real)
+    if any(not re.search(r"multiDrawIndirect\s*=\s*(false|0)\b", g) for g in real):
+        mode = "gpu"
+    elif "llvmpipe" in out:
+        mode = "llvmpipe"
+    else:
+        mode = None
+    _VULKAN.append(mode)
+    return mode
+
+
+def direct3d_version(path):
+    """Newest Direct3D a program uses: 11 (also 10 and DXGI), 9, 8 or None. Looks in the .exe and in the DLLs it
+    loads from its own folder: Unity games keep their Direct3D in UnityPlayer.dll next to a small .exe."""
+    d = os.path.dirname(path)
+    files = [path] + [os.path.join(d, n) for n in os.listdir(d) if n.lower() == "unityplayer.dll"]
+    for imp in pe_imports(path):
+        f = os.path.join(d, imp)
+        if imp[:-4] not in DXVK_DLLS and os.path.isfile(f) and f not in files:
+            files.append(f)
+    found = set()
+    for f in files:
+        try:
+            with open(f, "rb") as fh:
+                data = fh.read(64 * 1024 * 1024).lower()
+        except OSError:
+            continue
+        if b"d3d11.dll" in data or b"dxgi.dll" in data or b"d3d10.dll" in data or b"d3d10_1.dll" in data:
+            found.add(11)
+        if b"d3d9.dll" in data:
+            found.add(9)
+        if b"d3d8.dll" in data:
+            found.add(8)
+    return max(found) if found else None
 
 
 def dxvk(path, e):
-    """Programs named in ~/.config/exe-handler/dxvk.conf use DXVK (Direct3D 8-11 via Vulkan) instead of Wine's
-    own Direct3D: put DXVK's DLLs next to the program (once) and let Wine prefer them for this run. Needed for
-    Direct3D 11 games that Wine's OpenGL-based Direct3D cannot start (Unity games, 'failed to create device')."""
-    if not listed("dxvk.conf", path):
-        return e
-    k = kind(path)[0]
-    src = os.path.join(DXVK, "x64" if k == "win64" else "x32")
-    if not os.path.isdir(src):
-        log(f"dxvk.conf names this program, but DXVK is not in {DXVK} (run install.sh)")
-        return e
+    """DXVK (Direct3D 8-11 via Vulkan) instead of Wine's own OpenGL-based Direct3D, chosen automatically:
+    Direct3D 10/11 programs always get it (Wine's own cannot start Unity games on the Pi: 'failed to create
+    device'), Direct3D 8/9 programs only when a real GPU runs DXVK (on llvmpipe Wine's own is faster).
+    dxvk.conf forces it on, no-dxvk.conf or a file exe-handler.no-dxvk next to the program forces it off.
+    DXVK's DLLs are placed next to the program (once) and Wine prefers them for this run."""
     d = os.path.dirname(path)
     mark = os.path.join(d, DXVK_MARK)
     ours = set()
@@ -776,6 +806,26 @@ def dxvk(path, e):
         ours = {l.strip() for l in open(mark) if l.strip() and not l.startswith("#")}
     except OSError:
         pass
+    forced = listed("dxvk.conf", path)
+    use, why = False, ""
+    if not (listed("no-dxvk.conf", path) or next_to(path, "exe-handler.no-dxvk")):
+        ver = direct3d_version(path)
+        mode = vulkan_for_dxvk() if (ver or forced) else None
+        if mode and (forced or ver == 11 or mode == "gpu"):
+            use = True
+            why = "dxvk.conf" if forced else f"Direct3D {ver}"
+            if not os.path.isdir(os.path.join(DXVK, "x32")):
+                log(f"DXVK would help ({why}), but it is not in {DXVK} (run install.sh)")
+                use = False
+        elif forced:
+            log("dxvk.conf names this program, but there is no Vulkan for DXVK")
+    if not use:
+        if ours:                                  # placed earlier: make Wine ignore them this time
+            e = dict(e)
+            names = ",".join(n[:-4] for n in ours)
+            e["WINEDLLOVERRIDES"] = f"{names}=b" + (";" + e["WINEDLLOVERRIDES"] if e.get("WINEDLLOVERRIDES") else "")
+        return e
+    src = os.path.join(DXVK, "x64" if kind(path)[0] == "win64" else "x32")
     placed = []
     for n in DXVK_DLLS:
         s_, t_ = os.path.join(src, n + ".dll"), os.path.join(d, n + ".dll")
@@ -792,7 +842,8 @@ def dxvk(path, e):
     if set(placed) != ours:
         try:
             with open(mark, "w") as f:
-                f.write("# DLLs placed by exe-handler for DXVK (dxvk.conf). Delete them and this file to stop.\n")
+                f.write("# DLLs placed by exe-handler for DXVK. Delete them and this file, or create\n"
+                        "# exe-handler.no-dxvk here, to use Wine's own Direct3D again.\n")
                 f.write("\n".join(placed) + "\n")
         except OSError:
             pass
@@ -800,9 +851,12 @@ def dxvk(path, e):
     e = dict(e)
     names = ",".join(p[:-4] for p in placed)
     e["WINEDLLOVERRIDES"] = f"{names}=n,b" + (";" + e["WINEDLLOVERRIDES"] if e.get("WINEDLLOVERRIDES") else "")
-    if "DXVK_FILTER_DEVICE_NAME" not in e and gpu_lacks_dxvk():
+    e.setdefault("DXVK_LOG_LEVEL", "warn")       # 'info' writes hundreds of lines per start
+    if "DXVK_FILTER_DEVICE_NAME" not in e and vulkan_for_dxvk() == "llvmpipe":
         e["DXVK_FILTER_DEVICE_NAME"] = "llvmpipe"
-        log("DXVK: the GPU lacks multiDrawIndirect, so software Vulkan (llvmpipe): slow, but it runs")
+        log(f"DXVK for {why}: the GPU cannot run it, so software Vulkan (llvmpipe): slow, but it runs")
+    else:
+        log(f"DXVK for {why}")
     return e
 
 
@@ -1131,6 +1185,12 @@ def check(path):
     print(f"screen        {size[0]}x{size[1] if size else ''}" if size else "screen        unknown")
     vd = virtual_desktop(target) or (auto_desktop(target) if k not in ("dos", "bat", "msi") else None)
     print(f"virtual desk  {vd or 'no'}")
+    if k.startswith("win"):
+        ver, forced = direct3d_version(target), listed("dxvk.conf", target)
+        off = listed("no-dxvk.conf", target) or next_to(target, "exe-handler.no-dxvk")
+        mode = vulkan_for_dxvk() if (ver or forced) else None
+        on = bool(mode) and not off and (forced or ver == 11 or mode == "gpu")
+        print(f"Direct3D      {ver or 'no'}" + (f"  -> DXVK ({mode})" if on else "  -> Wine's own" if ver else ""))
     print(f"wine          {shlex.join(WINE)}  ({'found' if shutil.which(WINE[0]) else 'NOT FOUND'})")
     print(f"settings      {CONF}  ({'found' if os.path.exists(CONF) else 'not found'})")
     if shutil.which("xdg-mime"):
