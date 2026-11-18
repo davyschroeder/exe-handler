@@ -208,7 +208,10 @@ install_wine_x86() {
         sudo_run dpkg --add-architecture i386; sudo_run apt-get update -qq
       fi
       if command -v wine >/dev/null && dpkg -s wine32:i386 >/dev/null 2>&1; then echo "   =  wine with 32-bit support (already installed)"
-      else busy "installing Wine with 32-bit support (the biggest download, several minutes)" pkg_install wine wine64 wine32:i386 || busy "installing Wine" pkg_install wine; fi ;;
+      else busy "installing Wine with 32-bit support (the biggest download, several minutes)" pkg_install wine wine64 wine32:i386 || busy "installing Wine" pkg_install wine; fi
+      # videos in old games (intro films in Indeo 5, Age of Empires II): Wine decodes them through GStreamer, and a
+      # 32-bit game needs the 32-bit plugins (without them: "MCI Error ... loading the specified device driver")
+      busy "video codecs for old games (GStreamer, 32-bit)" pkg_try gstreamer1.0-libav:i386 gstreamer1.0-plugins-good:i386 gstreamer1.0-plugins-ugly:i386 ;;
     pacman)
       command -v wine >/dev/null && { WINE_CMD=wine; return; }
       grep -q '^\[multilib\]' /etc/pacman.conf || warn "enable [multilib] in /etc/pacman.conf for 32-bit programs"

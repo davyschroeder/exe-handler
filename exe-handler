@@ -1047,6 +1047,27 @@ def dxvk(path, e):
     return e
 
 
+WINE_OWN = {"services.exe", "winedevice.exe", "plugplay.exe", "svchost.exe", "rpcss.exe", "explorer.exe",
+            "conhost.exe", "wineboot.exe", "winemenubuilder.exe", "start.exe", "tabtip.exe"}
+
+
+def windows_programs():
+    """{pid: name} of the Windows programs running now (Wine sets a process's command line to the Windows one),
+    without Wine's own background programs."""
+    found = {}
+    for pid in os.listdir("/proc"):
+        if pid.isdigit():
+            try:
+                line = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ").decode(errors="replace")
+            except OSError:
+                continue
+            end = line.lower().find(".exe")         # the program is everything up to the first ".exe"
+            name = line[:end + 4].replace("\\", "/").rsplit("/", 1)[-1].lower() if end > 0 else ""
+            if name and name not in WINE_OWN:
+                found[int(pid)] = name
+    return found
+
+
 def run_wine(path, args, console, msi=False, prefix=None, e=None):
     if not page_size_ok():
         return 1
@@ -1106,6 +1127,7 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
         cmd = terminal(cmd)
     start = time.time()
     before = monitors()
+    programs = windows_programs()
     try:
         with open(LOG, "a") as lf:
             rc = subprocess.run(cmd, cwd=cwd, env=e, stdout=lf, stderr=lf).returncode
@@ -1119,6 +1141,13 @@ def run_wine(path, args, console, msi=False, prefix=None, e=None):
         restore_monitors(before)
     log(f"wine finished rc={rc} after {time.time() - start:.0f}s")
     if rc not in (0, None) and time.time() - start < 5:
+        # a launcher (AOESETUP.EXE on the Age of Empires II cd) starts the real program and stops with an error
+        # code itself: when a new Windows program is running now, nothing went wrong
+        time.sleep(2)
+        started = sorted(set(windows_programs().values()) - set(programs.values()))
+        if started:
+            log(f"{os.path.basename(path)} handed over to {', '.join(started)}: no error")
+            return 0
         missing = [] if (prefix or msi) else missing_dlls(path, e)
         if missing:
             names, where = ", ".join(m.upper() for m in missing), system_dir(path, e)

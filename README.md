@@ -126,6 +126,10 @@ Alles wat stil op de achtergrond draait, komt in een logbestand in `/tmp`; het p
   daarom randloos schermvullend op de resolutie van het scherm (Alt+Enter = venster en terug). Het hoofdmenu blijft
   800x600, dat doet het spel zelf; in een potje vult het slagveld het hele scherm. Een cnc-ddraw naast een spel telt
   niet als Direct3D 9 (geen DXVK).
+- **Installers die een ander programma starten** (bijv. `AOESETUP.EXE` van Age of Empires II): het startprogramma
+  stopt zelf meteen met een foutcode; exe-handler ziet dat er een nieuw Windows-programma draait en meldt dan geen fout.
+- **Introfilmpjes in oude spellen** (Indeo 5, o.a. Age of Empires II): `install.sh` zet op x86 de 32-bits
+  GStreamer-codecs erbij (`gstreamer1.0-libav:i386`); zonder die codecs geeft het spel "MCI Error ... device driver".
 - **Haperen bij het starten**: start Wine vanaf nul, dan leest het een tiental keer alle monitoren opnieuw uit; bij
   meerdere schermen staat het bureaublad daarbij telkens even stil (gemeten op drie schermen: 12 keer, samen
   2 seconden). exe-handler laat de Wine-server daarom aanstaan na het eerste Windows-programma: alleen dat eerste
